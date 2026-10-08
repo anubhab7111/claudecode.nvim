@@ -4,7 +4,11 @@
 
 local M = {}
 
-local claudecode_server_module = require("claudecode.server.init")
+-- Required lazily (only when building the Claude command) so loading this
+-- module does not pull in the whole server/tools graph.
+local function server_module()
+  return require("claudecode.server.init")
+end
 
 ---@type ClaudeCodeTerminalConfig
 local defaults = {
@@ -359,7 +363,7 @@ local function get_claude_command_and_env(cmd_args)
     cmd_string = base_cmd
   end
 
-  local sse_port_value = claudecode_server_module.state.port
+  local sse_port_value = server_module().state.port
   local env_table = {
     ENABLE_IDE_INTEGRATION = "true",
     FORCE_CODE_TERMINAL = "true",

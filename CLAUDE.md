@@ -87,9 +87,9 @@ The WebSocket server implements secure authentication using:
 - **Lock File Discovery**: Tokens stored in `~/.claude/ide/[port].lock` for Claude CLI
 - **MCP Compliance**: Follows official Claude Code IDE authentication protocol
 
-### MCP Tools Architecture (✅ FULLY COMPLIANT)
+### MCP Tools Architecture
 
-**Complete VS Code Extension Compatibility**: All tools now implement identical behavior and output formats as the official VS Code extension.
+The tools below implement the same names, parameters and output formats as the official IDE extensions' hidden `ide` MCP server. The VS Code extension additionally exposes `executeCode` (Jupyter), which this plugin does not implement.
 
 **MCP-Exposed Tools** (with JSON schemas):
 
@@ -157,12 +157,22 @@ The plugin emits `User` autocmds (not config fields) that integrations can hook:
 
 ### VS Code Extension Compatibility
 
-claudecode.nvim implements **100% feature parity** with Anthropic's official VS Code extension:
+claudecode.nvim follows the same architecture as the JetBrains plugin: the real `claude` CLI runs in a terminal and connects to the plugin's hidden `ide` MCP server. It is protocol-compatible with the official IDE servers (same tool names, schemas, output formats and error codes), with these known differences:
 
-- **Identical Tool Set**: All 10 VS Code tools implemented
-- **Compatible Formats**: Output structures match VS Code extension exactly
-- **Behavioral Consistency**: Same parameter handling and response patterns
-- **Error Compatibility**: Matching error codes and messages
+- **Not implemented**: `executeCode` (Jupyter kernel execution, VS Code only).
+- **Not applicable**: the VS Code graphical chat panel (session list, bookmarks, Focus view). Those features are available through the Claude TUI running in the terminal.
+
+### Request routing on the IDE port
+
+`server/client.lua` classifies each connection from its first request, before the WebSocket handshake:
+
+| Request | `client.kind` | Purpose |
+| --- | --- | --- |
+| `GET` + Upgrade, path other than `/mcp` | `ide` | Hidden IDE MCP socket (diffs, selection, at-mentions) |
+| `GET` + Upgrade, path `/mcp` | `tools` | Model-visible `nvim` MCP server (never receives IDE broadcasts) |
+| Any non-GET (e.g. `POST /hook`) | `http` | One-shot HTTP request handled by `server/http.lua` and routed via `server.register_http_route(path, handler)` |
+
+All kinds authenticate with the same `x-claude-code-ide-authorization` token. `tcp.broadcast` skips `tools` clients, and `is_claude_connected()` counts only IDE sockets. Queued at-mentions are flushed from the `on_handshake` callback for `ide` clients only.
 
 ### Protocol Validation
 

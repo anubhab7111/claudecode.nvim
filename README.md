@@ -15,7 +15,7 @@
 When Anthropic released Claude Code, they only supported VS Code and JetBrains. As a Neovim user, I wanted the same experience — so I reverse-engineered their extension and built this.
 
 - 🚀 **Pure Lua, Zero Dependencies** — Built entirely with `vim.loop` and Neovim built-ins
-- 🔌 **100% Protocol Compatible** — Same WebSocket MCP implementation as official extensions
+- 🔌 **Protocol Compatible** — Same WebSocket MCP protocol as the official IDE extensions (all IDE tools except VS Code's Jupyter `executeCode`)
 - 🎓 **Fully Documented Protocol** — Learn how to build your own integrations ([see PROTOCOL.md](./PROTOCOL.md))
 - ⚡ **First to Market** — Beat Anthropic to releasing Neovim support
 - 🛠️ **Built with AI** — Used Claude to reverse-engineer Claude's own protocol
@@ -231,6 +231,29 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
 - `:ClaudeCodeCloseAllDiffs` - Close pending Claude diffs (leaves accepted/saved diffs intact)
+- `:[range]ClaudeCodeInsertRef` - Type an `@file#L5-10` reference for the current file/range into the Claude prompt without submitting
+- `:'<,'>ClaudeCodeEdit {instruction}` - Ask Claude to change the selected lines; the edit comes back as a normal diff to review
+- `:ClaudeCodeSendTerm [bufnr]` - Paste another terminal's recent output (last `terminal_context_lines`, default 200) into the prompt, not submitted
+- `:ClaudeCodeCycleMode` - Cycle Claude's permission mode (same as `Shift+Tab` in the Claude TUI)
+
+`<Plug>` mappings (no default keys are created; map them yourself):
+
+```lua
+vim.keymap.set({ "n", "x" }, "<leader>ar", "<Plug>(claudecode-insert-ref)", { desc = "Claude: insert @reference" })
+vim.keymap.set("n", "<leader>am", "<Plug>(claudecode-cycle-mode)", { desc = "Claude: cycle permission mode" })
+```
+
+## Privacy: what Claude sees from your editor
+
+- **Secret files**: selected text from files matching `selection.exclude` is never sent; Claude only receives the path. Defaults: `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `*.p12`, `*.pfx`, `.netrc`. A list you set replaces the default.
+- **Open-file context**: with `selection.send_file_context = false`, only real selections are shared (not the file under your cursor).
+- **Network**: the IDE server binds `server_host = "127.0.0.1"`. Change it only when Claude cannot reach loopback (e.g. WSL2 NAT); a warning is logged because the port then becomes reachable from your network.
+
+```lua
+require("claudecode").setup({
+  selection = { send_file_context = true, exclude = { ".env", "*.pem", "secrets/*" } },
+})
+```
 
 ## Sending text to the Claude terminal
 

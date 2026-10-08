@@ -395,6 +395,10 @@ function M.open(cmd_string, env_table, config, focus)
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     terminal = term_instance
+    -- Snacks owns this buffer's filetype (snacks_terminal); only add a marker.
+    pcall(function()
+      vim.b[term_instance.buf].claudecode_terminal = true
+    end)
   else
     terminal = nil
     local logger = require("claudecode.logger")

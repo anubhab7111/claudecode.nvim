@@ -54,7 +54,9 @@ function M.is_claude_connected()
   -- Prefer handshake-aware check when client info is available; otherwise fall back to client_count
   if status.clients and #status.clients > 0 then
     for _, info in ipairs(status.clients) do
-      if (info.state == "connected" or info.handshake_complete == true) and info.handshake_complete == true then
+      -- Only the IDE socket counts as "Claude connected"; the `nvim` tools
+      -- socket (kind == "tools") is a separate MCP server.
+      if info.handshake_complete == true and info.kind ~= "tools" then
         return true
       end
     end
@@ -439,8 +441,13 @@ function M.setup(opts)
   -- Claude outside Neovim. Warns once here at setup (not per-send).
   M._maybe_warn_unfocusable_provider(M.state.config)
 
-  local diff = require("claudecode.diff")
-  diff.setup(M.state.config)
+  -- diff.lua is large and only needed once Claude opens a diff, so it is loaded
+  -- lazily (it picks up M.state.config on first require). Refresh it here only
+  -- when it is already loaded, e.g. when setup() is called a second time.
+  local loaded_diff = package.loaded["claudecode.diff"]
+  if loaded_diff and type(loaded_diff.setup) == "function" then
+    loaded_diff.setup(M.state.config)
+  end
 
   if M.state.config.auto_start then
     M.start(false) -- Suppress notification on auto-start
@@ -503,6 +510,16 @@ function M.start(show_startup_notification)
     return false, error_msg
   end
 
+  local host = M.state.config.server_host
+  if host and host ~= "127.0.0.1" and host ~= "::1" and host ~= "localhost" then
+    logger.warn(
+      "init",
+      "server_host is '"
+        .. host
+        .. "': the Claude IDE port is reachable from the network (token-protected, unencrypted ws://)."
+    )
+  end
+
   local success, result = server.start(M.state.config, auth_token)
 
   if not success then
@@ -548,6 +565,9 @@ function M.start(show_startup_notification)
 
   if M.state.config.track_selection then
     local selection = require("claudecode.selection")
+    if selection.configure then
+      selection.configure(M.state.config.selection)
+    end
     selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms)
   end
 
@@ -1126,14 +1146,70 @@ function M._create_commands()
       bang = true,
       desc = "Send text to the open Claude Code terminal and submit it (! to insert without submitting; native/snacks providers only)",
     })
+
+    -- Context helpers (lua/claudecode/context.lua, loaded on first use).
+    vim.api.nvim_create_user_command("ClaudeCodeInsertRef", function(opts)
+      require("claudecode.context").insert_reference(opts)
+    end, {
+      range = true,
+      desc = "Insert an @file#Lx-y reference for the current file/range into the Claude prompt (not submitted)",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeEdit", function(opts)
+      require("claudecode.context").edit(opts)
+    end, {
+      range = true,
+      nargs = "+",
+      desc = "Ask Claude to edit the selected range: :'<,'>ClaudeCodeEdit {instruction}",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeSendTerm", function(opts)
+      local bufnr = tonumber(opts.args)
+      require("claudecode.context").send_terminal_output(bufnr)
+    end, {
+      nargs = "?",
+      desc = "Paste another terminal buffer's recent output into the Claude prompt (not submitted)",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeCycleMode", function()
+      require("claudecode.context").cycle_mode()
+    end, {
+      desc = "Cycle Claude's permission mode (Shift+Tab in the Claude TUI)",
+    })
+
+    M._create_plug_mappings()
   else
     logger.error(
       "init",
       "Terminal module not found. Terminal commands (ClaudeCode, ClaudeCodeOpen, ClaudeCodeClose) not registered."
     )
   end
+  M._create_diff_commands()
+end
 
-  -- Diff management commands
+---Define <Plug> mappings (no default keys; map them yourself, e.g.
+---`vim.keymap.set({"n","x"}, "<leader>ar", "<Plug>(claudecode-insert-ref)")`).
+function M._create_plug_mappings()
+  if not (vim.keymap and vim.keymap.set) then
+    return
+  end
+  vim.keymap.set({ "n", "x" }, "<Plug>(claudecode-insert-ref)", function()
+    local mode = vim.fn.mode()
+    if mode == "v" or mode == "V" or mode == "\22" then
+      local l1, l2 = vim.fn.line("v"), vim.fn.line(".")
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+      require("claudecode.context").insert_reference({ range = 2, line1 = l1, line2 = l2 })
+    else
+      require("claudecode.context").insert_reference({ range = 0 })
+    end
+  end, { desc = "Claude: insert @reference for file/selection" })
+  vim.keymap.set("n", "<Plug>(claudecode-cycle-mode)", function()
+    require("claudecode.context").cycle_mode()
+  end, { desc = "Claude: cycle permission mode" })
+end
+
+---Create the diff management commands.
+function M._create_diff_commands()
   vim.api.nvim_create_user_command("ClaudeCodeDiffAccept", function()
     local diff = require("claudecode.diff")
     diff.accept_current_diff()

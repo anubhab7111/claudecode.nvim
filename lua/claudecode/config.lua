@@ -9,11 +9,26 @@ local M = {}
 ---@type ClaudeCodeConfig
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
+  -- Address the IDE server binds to. Keep loopback unless Claude runs somewhere
+  -- that cannot reach 127.0.0.1 (e.g. WSL2 NAT); a non-loopback host exposes the
+  -- (token-protected, unencrypted) port to the network.
+  server_host = "127.0.0.1",
   auto_start = true,
   terminal_cmd = nil,
   env = {}, -- Custom environment variables for Claude terminal
   log_level = "info",
   track_selection = true,
+  selection = {
+    -- Send the cursor file's path to Claude even when nothing is selected
+    -- (VS Code's "Attach Open File"). false = only real selections are sent.
+    send_file_context = true,
+    -- Glob patterns (matched against the file name and full path) whose
+    -- selected text is never sent to Claude; only the path is shared.
+    -- A user-supplied list replaces this default entirely.
+    exclude = { ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "id_ecdsa*", "*.p12", "*.pfx", ".netrc" },
+  },
+  -- Lines of scrollback sent by :ClaudeCodeSendTerm
+  terminal_context_lines = 200,
   -- When true, focus Claude terminal after a successful send while connected
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -66,6 +81,30 @@ function M.validate(config)
   )
 
   assert(type(config.auto_start) == "boolean", "auto_start must be a boolean")
+
+  if config.server_host ~= nil then
+    assert(type(config.server_host) == "string" and config.server_host ~= "", "server_host must be a non-empty string")
+  end
+
+  if config.selection ~= nil then
+    assert(type(config.selection) == "table", "selection must be a table")
+    if config.selection.send_file_context ~= nil then
+      assert(type(config.selection.send_file_context) == "boolean", "selection.send_file_context must be a boolean")
+    end
+    if config.selection.exclude ~= nil then
+      assert(type(config.selection.exclude) == "table", "selection.exclude must be a list of glob strings")
+      for i, pat in ipairs(config.selection.exclude) do
+        assert(type(pat) == "string" and pat ~= "", "selection.exclude[" .. i .. "] must be a non-empty string")
+      end
+    end
+  end
+
+  if config.terminal_context_lines ~= nil then
+    assert(
+      type(config.terminal_context_lines) == "number" and config.terminal_context_lines > 0,
+      "terminal_context_lines must be a positive number"
+    )
+  end
 
   assert(config.terminal_cmd == nil or type(config.terminal_cmd) == "string", "terminal_cmd must be nil or a string")
 
@@ -211,6 +250,11 @@ function M.apply(user_config)
         config[k] = v
       end
     end
+  end
+
+  -- List-valued options replace the default instead of merging by index.
+  if user_config and type(user_config.selection) == "table" and user_config.selection.exclude ~= nil then
+    config.selection.exclude = vim.deepcopy(user_config.selection.exclude)
   end
 
   -- Backward compatibility: map legacy diff options to new fields if provided

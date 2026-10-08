@@ -8,6 +8,37 @@ local MCP_PROTOCOL_VERSION = "2024-11-05"
 
 local M = {}
 
+---MCP protocol revisions this server can speak. `initialize` echoes the
+---client's requested revision when it is one of these (MCP version
+---negotiation), and otherwise falls back to the oldest, most widely supported one.
+M.KNOWN_PROTOCOL_VERSIONS = { "2025-06-18", "2025-03-26", "2024-11-05" }
+
+---Pick the protocol version to answer `initialize` with.
+---@param requested any The client's requested protocolVersion
+---@return string version
+function M.negotiate_protocol_version(requested)
+  if type(requested) == "string" then
+    for _, v in ipairs(M.KNOWN_PROTOCOL_VERSIONS) do
+      if v == requested then
+        return v
+      end
+    end
+  end
+  return MCP_PROTOCOL_VERSION
+end
+
+---HTTP routes served on the IDE port, keyed by path (e.g. "/hook").
+---Each handler is `function(client, req, respond)`; see server/http.lua.
+---@type table<string, fun(client: table, req: table, respond: fun(status: number, body: string|nil))>
+M.http_routes = {}
+
+---Register (or remove, with nil) an HTTP route on the IDE port.
+---@param path string
+---@param handler function|nil
+function M.register_http_route(path, handler)
+  M.http_routes[path] = handler
+end
+
 ---@class ServerState
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
@@ -51,20 +82,34 @@ function M.start(config, auth_token)
       M._handle_message(client, message)
     end,
     on_connect = function(client)
-      -- Log connection with auth status
+      logger.debug("server", "TCP client accepted:", client.id)
+    end,
+    on_handshake = function(client)
       if M.state.auth_token then
-        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+        logger.debug("server", "Authenticated WebSocket client connected:", client.id, "kind:", client.kind)
       else
-        logger.debug("server", "WebSocket client connected (no auth):", client.id)
+        logger.debug("server", "WebSocket client connected (no auth):", client.id, "kind:", client.kind)
       end
 
-      -- Notify main module about new connection for queue processing
+      -- Only the IDE socket consumes queued @ mentions. Hook POSTs and the
+      -- `nvim` tools socket must not trigger queue processing.
+      if client.kind ~= "ide" then
+        return
+      end
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
         vim.schedule(function()
           main_module.process_mention_queue(true)
         end)
       end
+    end,
+    on_http = function(client, req, respond)
+      local handler = M.http_routes[req.path]
+      if not handler then
+        respond(404, '{"error":"not found"}')
+        return
+      end
+      handler(client, req, respond)
     end,
     on_disconnect = function(client, code, reason)
       logger.debug(
@@ -79,8 +124,9 @@ function M.start(config, auth_token)
 
       -- Close diffs this client opened but never resolved (issue #248) -- only if
       -- the diff module is in use. Scheduled: diff cleanup touches window APIs.
+      -- Only IDE clients open diffs; hook/tools connections never do.
       local diff = package.loaded["claudecode.diff"]
-      if diff then
+      if diff and client.kind ~= "http" and client.kind ~= "tools" then
         local client_id = client.id
         vim.schedule(function()
           diff.close_diffs_for_client(client_id, "client disconnected")
@@ -278,7 +324,7 @@ function M.register_handlers()
   M.state.handlers = {
     ["initialize"] = function(client, params)
       return {
-        protocolVersion = MCP_PROTOCOL_VERSION,
+        protocolVersion = M.negotiate_protocol_version(params and params.protocolVersion),
         capabilities = {
           logging = vim.empty_dict(), -- Ensure this is an object {} not an array []
           prompts = { listChanged = true },

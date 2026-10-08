@@ -3,6 +3,10 @@ local client_manager = require("claudecode.server.client")
 
 local M = {}
 
+---Default bind address. Loopback only: the IDE port must never be reachable
+---from the network unless the user explicitly opts in via `server_host`.
+M.DEFAULT_HOST = "127.0.0.1"
+
 ---@class TCPServer
 ---@field server table The vim.loop TCP server handle
 ---@field port number The port the server is listening on
@@ -12,6 +16,9 @@ local M = {}
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for errors
+---@field on_http fun(client: table, req: table, respond: function)|nil Callback for plain HTTP requests
+---@field on_handshake fun(client: table)|nil Callback after a successful WebSocket handshake
+---@field host string Address the server is bound to
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -67,8 +74,9 @@ end
 ---authoritative check is create_server's bind+listen with retry.
 ---@param min_port number Minimum port to try
 ---@param max_port number Maximum port to try
+---@param host string|nil Address to probe (default 127.0.0.1)
 ---@return number|nil port Available port number, or nil if none found
-function M.find_available_port(min_port, max_port)
+function M.find_available_port(min_port, max_port, host)
   assert(type(min_port) == "number", "min_port must be a number")
   assert(type(max_port) == "number", "max_port must be a number")
 
@@ -79,7 +87,7 @@ function M.find_available_port(min_port, max_port)
   for port in port_iterator(min_port, max_port) do
     local test_server = vim.loop.new_tcp()
     if test_server then
-      local success = test_server:bind("127.0.0.1", port)
+      local success = test_server:bind(host or M.DEFAULT_HOST, port)
       test_server:close()
 
       if success then
@@ -106,7 +114,7 @@ function M._bind_and_listen(server, port)
     return nil, "Failed to create TCP server"
   end
 
-  local bind_success, bind_err = handle:bind("127.0.0.1", port)
+  local bind_success, bind_err = handle:bind(server.host or M.DEFAULT_HOST, port)
   if not bind_success then
     handle:close()
     return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
@@ -149,7 +157,19 @@ function M.create_server(config, callbacks, auth_token)
     on_connect = callbacks.on_connect or function() end,
     on_disconnect = callbacks.on_disconnect or function() end,
     on_error = callbacks.on_error or function() end,
+    on_http = callbacks.on_http,
+    on_handshake = callbacks.on_handshake,
+    host = config.server_host or M.DEFAULT_HOST,
   }
+  local process_opts = {
+    on_http = server.on_http and function(...)
+      return server.on_http(...)
+    end or nil,
+    on_handshake = server.on_handshake and function(...)
+      return server.on_handshake(...)
+    end or nil,
+  }
+  server._process_opts = process_opts
 
   -- Walk candidate ports and bind+listen on each until one succeeds. Retrying
   -- here (rather than committing to a single pre-probed port) is what fixes #283:
@@ -218,7 +238,7 @@ function M._handle_new_connection(server)
     end, function(cl, error_msg)
       server.on_error("Client " .. cl.id .. " error: " .. error_msg)
       M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
-    end, server.auth_token)
+    end, server.auth_token, server._process_opts)
   end)
 
   -- Notify about new connection
@@ -290,12 +310,16 @@ function M.send_to_client(server, client_id, message, callback)
   client_manager.send_message(client, message, callback)
 end
 
----Broadcast a message to all connected clients
+---Broadcast a message to all connected IDE clients.
+---Clients on the `nvim` tools socket (`kind == "tools"`) are a separate MCP
+---server and must not receive IDE notifications such as selection_changed.
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
 function M.broadcast(server, message)
   for _, client in pairs(server.clients) do
-    client_manager.send_message(client, message)
+    if client.kind ~= "tools" then
+      client_manager.send_message(client, message)
+    end
   end
 end
 

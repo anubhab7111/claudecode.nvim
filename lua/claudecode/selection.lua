@@ -808,16 +808,112 @@ function M.has_selection_changed(new_selection)
   return false
 end
 
+-- Privacy options (see config `selection`). Kept as plain module state so the
+-- hot path is a table lookup; patterns are compiled once in M.configure.
+M.options = {
+  send_file_context = true,
+  exclude_patterns = {}, -- compiled Lua patterns
+}
+local exclude_cache = {} -- file path -> boolean
+
+---Convert a simple glob (`*`, `?`, literal chars) into an anchored Lua pattern.
+---@param glob string
+---@return string pattern
+function M._glob_to_pattern(glob)
+  local out = { "^" }
+  for i = 1, #glob do
+    local c = glob:sub(i, i)
+    if c == "*" then
+      out[#out + 1] = "[^/]*"
+    elseif c == "?" then
+      out[#out + 1] = "[^/]"
+    elseif c:match("[%^%$%(%)%%%.%[%]%+%-]") then
+      out[#out + 1] = "%" .. c
+    else
+      out[#out + 1] = c
+    end
+  end
+  out[#out + 1] = "$"
+  return table.concat(out)
+end
+
+---Apply the `selection` config table. Cheap; safe to call more than once.
+---@param opts table|nil `{ send_file_context = boolean, exclude = string[] }`
+function M.configure(opts)
+  opts = opts or {}
+  if opts.send_file_context ~= nil then
+    M.options.send_file_context = opts.send_file_context
+  end
+  if opts.exclude then
+    local compiled = {}
+    for _, glob in ipairs(opts.exclude) do
+      compiled[#compiled + 1] = M._glob_to_pattern(glob)
+    end
+    M.options.exclude_patterns = compiled
+  end
+  exclude_cache = {}
+end
+
+---Whether a file's selected text must be withheld from Claude.
+---Matches each pattern against the basename and the full path; memoized per path.
+---@param path string|nil
+---@return boolean
+function M.is_excluded(path)
+  if not path or path == "" or #M.options.exclude_patterns == 0 then
+    return false
+  end
+  local cached = exclude_cache[path]
+  if cached ~= nil then
+    return cached
+  end
+  local basename = path:match("[^/\\]+$") or path
+  local result = false
+  for _, pat in ipairs(M.options.exclude_patterns) do
+    if basename:match(pat) or path:match(pat) then
+      result = true
+      break
+    end
+  end
+  exclude_cache[path] = result
+  return result
+end
+
+---Return the selection as it may be shown to Claude: text from excluded files is
+---replaced by an empty string (the path and range are still shared, matching the
+---VS Code extension's "path only" behaviour). Does not mutate the input.
+---@param selection table|nil
+---@return table|nil
+function M.redact(selection)
+  if type(selection) ~= "table" or not selection.text or selection.text == "" then
+    return selection
+  end
+  if not M.is_excluded(selection.filePath) then
+    return selection
+  end
+  local copy = vim.deepcopy(selection)
+  copy.text = ""
+  return copy
+end
+
 ---Sends the selection update to the Claude server.
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
-  M.server.broadcast("selection_changed", selection)
+  if
+    not M.options.send_file_context
+    and type(selection) == "table"
+    and type(selection.selection) == "table"
+    and selection.selection.isEmpty
+  then
+    -- Open-file context disabled: only real selections reach Claude.
+    return
+  end
+  M.server.broadcast("selection_changed", M.redact(selection))
 end
 
----Gets the latest recorded selection.
+---Gets the latest recorded selection (redacted for excluded files).
 ---@return table|nil The latest selection object, or nil if none recorded.
 function M.get_latest_selection()
-  return M.state.latest_selection
+  return M.redact(M.state.latest_selection)
 end
 
 ---Sends the current selection to Claude.
@@ -967,4 +1063,7 @@ function M.send_at_mention_for_visual_selection(line1, line2)
     return false
   end
 end
+-- Compile the default exclude list so redaction works even before setup().
+M.configure(require("claudecode.config").defaults.selection)
+
 return M

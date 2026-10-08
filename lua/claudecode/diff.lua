@@ -26,6 +26,14 @@ local logger = require("claudecode.logger")
 
 ---@type ClaudeCodeConfig
 local config
+-- This module is loaded lazily (on the first diff), after setup() has already
+-- run: adopt the active configuration without requiring the main module.
+do
+  local main = package.loaded["claudecode"]
+  if type(main) == "table" and type(main.state) == "table" and type(main.state.config) == "table" then
+    config = main.state.config
+  end
+end
 
 ---@type number
 local autocmd_group

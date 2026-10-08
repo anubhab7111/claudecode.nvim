@@ -133,6 +133,12 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   bufnr = vim.api.nvim_get_current_buf()
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
+  -- Mark the buffer so users can target it (ftplugin/claudecode.lua, FileType
+  -- autocmds) and so other code can recognise it without name heuristics.
+  pcall(function()
+    vim.b[bufnr].claudecode_terminal = true
+    vim.bo[bufnr].filetype = "claudecode"
+  end)
 
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode

@@ -1,6 +1,7 @@
 ---@brief WebSocket client connection management
 local frame = require("claudecode.server.frame")
 local handshake = require("claudecode.server.handshake")
+local http = require("claudecode.server.http")
 local logger = require("claudecode.logger")
 
 local M = {}
@@ -13,6 +14,10 @@ local M = {}
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
+---@field kind "ide"|"tools"|"http"|nil Connection kind, decided from the first request:
+---  `ide` = the hidden IDE MCP socket (diffs/selection), `tools` = the model-visible
+---  `nvim` MCP socket (GET /mcp), `http` = a one-shot HTTP request (Claude hooks).
+---@field path string|nil Request path of the initial HTTP request
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -40,12 +45,27 @@ end
 ---@param on_close function Callback for client close: function(client, code, reason)
 ---@param on_error function Callback for errors: function(client, error_msg)
 ---@param auth_token string|nil Expected authentication token for validation
-function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+---@param opts table|nil Optional callbacks: `on_http(client, req, respond)` for plain
+---  HTTP requests and `on_handshake(client)` once a WebSocket handshake succeeds.
+function M.process_data(client, data, on_message, on_close, on_error, auth_token, opts)
+  if client.kind == "http" then
+    http.feed(client, data)
+    return
+  end
+
   client.buffer = client.buffer .. data
 
   if not client.handshake_complete then
     local complete, request, remaining = handshake.extract_http_request(client.buffer)
     if complete and request then
+      local method, path = handshake.parse_request_line(request)
+      if method and method ~= "GET" then
+        http.begin(client, request, remaining, auth_token, opts and opts.on_http)
+        return
+      end
+      client.path = path
+      client.kind = (path and path:gsub("%?.*$", "") == "/mcp") and "tools" or "ide"
+
       logger.debug("client", "Processing WebSocket handshake for client:", client.id)
 
       -- Log if auth token is required
@@ -96,10 +116,13 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           client.handshake_complete = true
           client.state = "connected"
           client.buffer = remaining
-          logger.debug("client", "WebSocket connection established for client:", client.id)
+          logger.debug("client", "WebSocket connection established for client:", client.id, "kind:", client.kind)
+          if opts and opts.on_handshake then
+            opts.on_handshake(client)
+          end
 
           if #client.buffer > 0 then
-            M.process_data(client, "", on_message, on_close, on_error, auth_token)
+            M.process_data(client, "", on_message, on_close, on_error, auth_token, opts)
           end
         else
           client.state = "closing"
@@ -322,6 +345,7 @@ function M.get_client_info(client)
     id = client.id,
     state = client.state,
     handshake_complete = client.handshake_complete,
+    kind = client.kind,
     buffer_size = #client.buffer,
     last_ping = client.last_ping,
     last_pong = client.last_pong,
