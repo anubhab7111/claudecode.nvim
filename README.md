@@ -276,6 +276,29 @@ When Claude proposes changes, the plugin opens a native Neovim diff view:
 
 You can edit Claude's suggestions before accepting them.
 
+### Reviewing one change at a time
+
+Review keys are Vim's own diff verbs, set only on the proposed buffer (they disappear with it):
+
+| Key     | Action                                                            |
+| ------- | ----------------------------------------------------------------- |
+| `]c`    | next change                                                       |
+| `[c`    | previous change                                                   |
+| `do`    | reject this change (restore the original lines)                   |
+| `dp`    | keep this change and jump to the next one (never edits your file) |
+| `u`     | undo a reject                                                     |
+| `:w`    | accept the file with your per-change choices                      |
+| `:q`    | reject the whole file                                             |
+| `<C-g>` | accept the file and jump to the next pending diff                 |
+
+The same keys work in the `unified` layout. In the side-by-side layouts `]c`, `[c`, `do` and `u` are simply Vim's built-ins. Remap or disable any key with `diff_opts.keys`:
+
+```lua
+diff_opts = {
+  keys = { accept_next = "<leader>an", keep_hunk = false }, -- or keys = false to disable all
+}
+```
+
 If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals — it leaves any diff you have already accepted (`:w`) but whose file has not been written yet untouched, so your saved edits are never discarded.
 
 ## Events

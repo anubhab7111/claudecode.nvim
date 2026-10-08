@@ -196,6 +196,18 @@ function M.validate(config)
       "diff_opts.on_new_file_reject must be 'keep_empty' or 'close_window'"
     )
   end
+  if config.diff_opts.keys ~= nil then
+    local keys = config.diff_opts.keys
+    assert(keys == false or type(keys) == "table", "diff_opts.keys must be a table or false")
+    if type(keys) == "table" then
+      for action, lhs in pairs(keys) do
+        assert(
+          lhs == false or (type(lhs) == "string" and lhs ~= ""),
+          "diff_opts.keys." .. tostring(action) .. " must be a key string or false"
+        )
+      end
+    end
+  end
   if config.diff_opts.auto_resize_terminal ~= nil then
     assert(type(config.diff_opts.auto_resize_terminal) == "boolean", "diff_opts.auto_resize_terminal must be a boolean")
   end

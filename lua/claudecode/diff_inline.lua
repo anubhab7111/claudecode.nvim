@@ -22,6 +22,7 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffDelete", { bg = "#4a2a2a", strikethrough = true, default = true })
   vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffAddSign", { fg = "#98c379", default = true })
   vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffDeleteSign", { fg = "#e06c75", default = true })
+  vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffRejected", { link = "Comment", strikethrough = true, default = true })
 end
 
 -- ── Pure functions (testable in isolation) ────────────────────────
@@ -104,18 +105,197 @@ function M.compute_inline_diff(old_text, new_text)
   return result_lines, result_types
 end
 
---- Collect only "unchanged" + "added" lines (the accepted new content).
+--- Group consecutive changed lines into hunks.
+---@param line_types string[] Parallel type array
+---@return {s: integer, e: integer}[] hunks 1-based, inclusive buffer line ranges
+function M.compute_hunks(line_types)
+  local hunks = {}
+  local start = nil
+  for i, lt in ipairs(line_types) do
+    if lt ~= "unchanged" then
+      start = start or i
+    elseif start then
+      hunks[#hunks + 1] = { s = start, e = i - 1 }
+      start = nil
+    end
+  end
+  if start then
+    hunks[#hunks + 1] = { s = start, e = #line_types }
+  end
+  return hunks
+end
+
+--- Index of the hunk at `lnum`, or the closest one above it (Vim's `do`/`dp`
+--- rule); falls back to the first hunk when the cursor is above all of them.
+---@param hunks {s: integer, e: integer}[]
+---@param lnum integer 1-based line
+---@return integer|nil index
+function M.hunk_index_at(hunks, lnum)
+  local found = nil
+  for i, h in ipairs(hunks) do
+    if h.s <= lnum then
+      found = i
+    else
+      break
+    end
+  end
+  if not found and #hunks > 0 then
+    found = 1
+  end
+  return found
+end
+
+--- Collect the accepted content: unchanged lines, plus for each hunk either its
+--- added lines (kept, the default) or its deleted lines (rejected).
 ---@param lines string[] Buffer lines
 ---@param line_types string[] Parallel type array
+---@param rejected table<integer, boolean>|nil Set of rejected hunk start lines
 ---@return string content The accepted content joined with newlines
-function M.extract_new_content(lines, line_types)
+function M.extract_new_content(lines, line_types, rejected)
   local out = {}
+  local hunk_rejected = false
   for i, lt in ipairs(line_types) do
-    if lt ~= "deleted" then
+    if lt == "unchanged" then
+      hunk_rejected = false
       out[#out + 1] = lines[i]
+    else
+      if i == 1 or line_types[i - 1] == "unchanged" then
+        hunk_rejected = rejected ~= nil and rejected[i] == true
+      end
+      if (lt == "added" and not hunk_rejected) or (lt == "deleted" and hunk_rejected) then
+        out[#out + 1] = lines[i]
+      end
     end
   end
   return table.concat(out, "\n")
+end
+
+--- Draw one hunk's extmarks for its current decision.
+---@param buf number
+---@param line_types string[]
+---@param hunk {s: integer, e: integer}
+---@param is_rejected boolean
+function M.render_hunk(buf, line_types, hunk, is_rejected)
+  vim.api.nvim_buf_clear_namespace(buf, ns, hunk.s - 1, hunk.e)
+  for i = hunk.s, hunk.e do
+    local lt = line_types[i]
+    if is_rejected then
+      if lt == "added" then
+        vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
+          line_hl_group = "ClaudeCodeInlineDiffRejected",
+          sign_text = "x",
+          sign_hl_group = "ClaudeCodeInlineDiffDeleteSign",
+        })
+      else
+        -- The original line is kept: show it plainly with a "kept" marker.
+        vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, { sign_text = "=", sign_hl_group = "Comment" })
+      end
+    elseif lt == "added" then
+      vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
+        line_hl_group = "ClaudeCodeInlineDiffAdd",
+        sign_text = "+",
+        sign_hl_group = "ClaudeCodeInlineDiffAddSign",
+      })
+    elseif lt == "deleted" then
+      vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
+        line_hl_group = "ClaudeCodeInlineDiffDelete",
+        sign_text = "-",
+        sign_hl_group = "ClaudeCodeInlineDiffDeleteSign",
+      })
+    end
+  end
+end
+
+--- Get the registered unified diff state for a tab.
+---@param tab_name string
+---@return table|nil
+local function get_state(tab_name)
+  local diff = package.loaded["claudecode.diff"]
+  local state = diff and diff._get_active_diffs()[tab_name]
+  if state and state.layout == "unified" then
+    return state
+  end
+  return nil
+end
+
+--- Set the decision for the hunk at `lnum` ("rejected" or "kept").
+--- Records the previous decision so it can be undone.
+---@param tab_name string
+---@param lnum integer 1-based cursor line
+---@param decision "rejected"|"kept"
+---@return integer|nil hunk_index
+function M.set_hunk_decision(tab_name, lnum, decision)
+  local state = get_state(tab_name)
+  if not state or state.status ~= "pending" then
+    return nil
+  end
+  state.hunks = state.hunks or M.compute_hunks(state.line_types)
+  state.rejected = state.rejected or {}
+  state.decision_stack = state.decision_stack or {}
+
+  local idx = M.hunk_index_at(state.hunks, lnum)
+  if not idx then
+    return nil
+  end
+  local hunk = state.hunks[idx]
+  local was_rejected = state.rejected[hunk.s] == true
+  local now_rejected = decision == "rejected"
+  if was_rejected ~= now_rejected then
+    table.insert(state.decision_stack, { s = hunk.s, was_rejected = was_rejected })
+    state.rejected[hunk.s] = now_rejected or nil
+    if state.new_buffer and vim.api.nvim_buf_is_valid(state.new_buffer) then
+      M.render_hunk(state.new_buffer, state.line_types, hunk, now_rejected)
+    end
+  end
+  return idx
+end
+
+--- Undo the most recent hunk decision.
+---@param tab_name string
+---@return integer|nil line The start line of the hunk that was restored
+function M.undo_hunk_decision(tab_name)
+  local state = get_state(tab_name)
+  if not state or not state.decision_stack or #state.decision_stack == 0 then
+    return nil
+  end
+  local entry = table.remove(state.decision_stack)
+  state.rejected[entry.s] = entry.was_rejected or nil
+  for _, h in ipairs(state.hunks) do
+    if h.s == entry.s then
+      if state.new_buffer and vim.api.nvim_buf_is_valid(state.new_buffer) then
+        M.render_hunk(state.new_buffer, state.line_types, h, entry.was_rejected)
+      end
+      break
+    end
+  end
+  return entry.s
+end
+
+--- Line number of the next/previous hunk start relative to `lnum`.
+---@param tab_name string
+---@param lnum integer
+---@param direction 1|-1
+---@return integer|nil line
+function M.adjacent_hunk_line(tab_name, lnum, direction)
+  local state = get_state(tab_name)
+  if not state then
+    return nil
+  end
+  state.hunks = state.hunks or M.compute_hunks(state.line_types)
+  if direction > 0 then
+    for _, h in ipairs(state.hunks) do
+      if h.s > lnum then
+        return h.s
+      end
+    end
+  else
+    for i = #state.hunks, 1, -1 do
+      if state.hunks[i].s < lnum then
+        return state.hunks[i].s
+      end
+    end
+  end
+  return nil
 end
 
 --- Apply line highlights and sign-column markers via extmarks.
@@ -482,7 +662,7 @@ end
 function M.resolve_inline_as_saved(tab_name, diff_data)
   logger.debug("diff", "Accepting inline diff for", tab_name)
 
-  local content = M.extract_new_content(diff_data.lines, diff_data.line_types)
+  local content = M.extract_new_content(diff_data.lines, diff_data.line_types, diff_data.rejected)
   -- Preserve trailing newline when original new_file_contents had one
   if diff_data.new_file_contents:sub(-1) == "\n" and content:sub(-1) ~= "\n" then
     content = content .. "\n"

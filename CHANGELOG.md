@@ -4,6 +4,7 @@
 
 ### Features
 
+- Per-change diff review with Vim's diff verbs ([#169](https://github.com/coder/claudecode.nvim/issues/169)): `]c`/`[c` to move, `do` to reject a change, `dp` to keep it and jump to the next, `u` to undo, `:w` to accept the file with your choices, `<C-g>` to accept and jump to the next pending diff. Works in the side-by-side and `unified` layouts; keys are buffer-local to the proposed buffer and configurable via `diff_opts.keys`.
 - Selected text from secret files (`selection.exclude`: `.env`, `*.pem`, `*.key`, SSH keys, …) is no longer sent to Claude; only the path is shared. `selection.send_file_context = false` stops sharing the file under the cursor when nothing is selected (VS Code's "Attach Open File" off).
 - `server_host` option for the IDE server bind address (default `127.0.0.1`; warns when non-loopback, e.g. for WSL2 NAT setups) ([#212](https://github.com/coder/claudecode.nvim/issues/212)).
 - MCP protocol version negotiation: `initialize` echoes the client's requested revision (`2025-06-18`, `2025-03-26`, `2024-11-05`) instead of always answering `2024-11-05`.

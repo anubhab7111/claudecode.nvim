@@ -1335,6 +1335,7 @@ function M._setup_blocking_diff(params, resolution_callback)
 
       local state = active_diffs[tab_name]
       if state then
+        require("claudecode.diff_keys").attach(tab_name, state.new_buffer, "unified", config)
         fire_diff_event("ClaudeCodeDiffOpened", {
           tab_name = tab_name,
           file_path = params.old_file_path,
@@ -1507,6 +1508,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       is_new_file = is_new_file,
       client_id = params.client_id,
     })
+
+    require("claudecode.diff_keys").attach(tab_name, new_buffer, "split", config)
 
     -- Notify listeners that a diff is now open. Always emitted (independent of
     -- auto_resize_terminal); pairs with ClaudeCodeDiffClosed. Handlers receive
@@ -1835,6 +1838,50 @@ function M.accept_current_diff()
   end
 
   M._resolve_diff_as_saved(tab_name, current_buffer)
+end
+
+---Accept a diff (by tab name, or the one in the current buffer) and move focus
+---to the oldest other diff that is still pending, if any.
+---@param tab_name string|nil
+---@return string|nil next_tab_name The diff that received focus
+function M.accept_and_next(tab_name)
+  tab_name = tab_name or vim.b[vim.api.nvim_get_current_buf()].claudecode_diff_tab_name
+  local current = tab_name and active_diffs[tab_name]
+  if not current then
+    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    return nil
+  end
+  M._resolve_diff_as_saved(tab_name, current.new_buffer)
+
+  local next_name, next_data
+  for name, data in pairs(active_diffs) do
+    if name ~= tab_name and data.status == "pending" then
+      if not next_data or (data.created_at or 0) < (next_data.created_at or 0) then
+        next_name, next_data = name, data
+      end
+    end
+  end
+  if not next_data then
+    return nil
+  end
+  local win = next_data.new_window
+  if win and vim.api.nvim_win_is_valid(win) then
+    local tab = vim.api.nvim_win_get_tabpage(win)
+    if tab ~= vim.api.nvim_get_current_tabpage() then
+      pcall(vim.api.nvim_set_current_tabpage, tab)
+    end
+    vim.api.nvim_set_current_win(win)
+    if next_data.layout == "unified" then
+      local inline = require("claudecode.diff_inline")
+      local first = inline.adjacent_hunk_line(next_name, 0, 1)
+      if first then
+        pcall(vim.api.nvim_win_set_cursor, win, { first, 0 })
+      end
+    else
+      pcall(vim.cmd, "normal! gg]c")
+    end
+  end
+  return next_name
 end
 
 ---Deny/reject the current diff (user command version)
