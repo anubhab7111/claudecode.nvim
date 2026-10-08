@@ -255,6 +255,43 @@ require("claudecode").setup({
 })
 ```
 
+## Hooks bridge: statusline, alerts, autosave, live reload
+
+When the plugin launches Claude it adds `--settings <file>` with [HTTP hooks](https://code.claude.com/docs/en/hooks) that post Claude's lifecycle events back to Neovim's IDE port. Claude merges these with your own hooks (it never replaces them), and they are fire-and-forget except the short `PreToolUse` check, so Claude never waits on Neovim. Nothing is polled; work happens only when an event arrives.
+
+What you get:
+
+- **Statusline**: `require("claudecode").statusline()` returns e.g. `claude: working · plan · 2 agents · 3/5` (or `""` when no session is connected). It is a cached string, safe to call on every redraw. `User ClaudeCodeStatus` fires when it changes.
+- **Alerts**: `vim.notify` when Claude needs your permission/input or finishes, only while the Claude terminal is hidden (`alerts.only_when_hidden`).
+- **Autosave** (`autosave = true`): a modified buffer is written (`noautocmd update`) right before Claude reads or edits that file, so Claude never works from stale content.
+- **Live reload** (`follow.checktime = true`): after Claude edits a file, that buffer is reloaded immediately. `follow.flash = true` briefly highlights it.
+- **Events**: every hook payload is re-emitted as `User ClaudeCodeHook` (`args.data` = the payload).
+
+```lua
+-- lualine example
+sections = { lualine_x = { function() return require("claudecode").statusline() end } }
+
+-- react to anything Claude does
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeHook",
+  callback = function(args)
+    if args.data.hook_event_name == "Stop" then vim.cmd("silent! wall") end
+  end,
+})
+```
+
+Options (defaults shown):
+
+```lua
+hooks = { enabled = true, sync_timeout = 5 },
+autosave = true,
+alerts = { enabled = true, only_when_hidden = true },
+follow = { checktime = true, flash = false },
+status = { format = nil }, -- function(state) -> string
+```
+
+With `terminal.provider = "none"` you start Claude yourself: run `:ClaudeCodeLaunchCmd` to print (and yank) the exact command, including the hooks settings and token environment variable.
+
 ## Sending text to the Claude terminal
 
 `:ClaudeCodeSendText {text}` types `{text}` into the open Claude terminal and submits it — useful for scripting and keymaps. Use `:ClaudeCodeSendText!` to insert the text without submitting. The same is available programmatically:

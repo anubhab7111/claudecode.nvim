@@ -29,6 +29,27 @@ M.defaults = {
   },
   -- Lines of scrollback sent by :ClaudeCodeSendTerm
   terminal_context_lines = 200,
+  -- Claude Code HTTP hooks posted back to this Neovim (status, alerts,
+  -- autosave, follow, plan review). Injected per session with
+  -- `claude --settings <file>`; merged with your own hooks, never replacing them.
+  hooks = {
+    enabled = true,
+    sync_timeout = 5, -- seconds Claude waits for the PreToolUse reply
+  },
+  -- Write a modified buffer before Claude reads/edits its file (needs hooks).
+  autosave = true,
+  -- vim.notify when Claude needs input or finishes (needs hooks).
+  alerts = {
+    enabled = true,
+    only_when_hidden = true, -- stay quiet while the Claude terminal is visible
+  },
+  -- React to files Claude changed (needs hooks).
+  follow = {
+    checktime = true, -- reload that buffer right away
+    flash = false, -- briefly highlight the reloaded buffer
+  },
+  -- Statusline text formatter: function(state) -> string (nil = built-in)
+  status = { format = nil },
   -- When true, focus Claude terminal after a successful send while connected
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -97,6 +118,34 @@ function M.validate(config)
         assert(type(pat) == "string" and pat ~= "", "selection.exclude[" .. i .. "] must be a non-empty string")
       end
     end
+  end
+
+  if config.hooks ~= nil then
+    assert(type(config.hooks) == "table", "hooks must be a table")
+    if config.hooks.enabled ~= nil then
+      assert(type(config.hooks.enabled) == "boolean", "hooks.enabled must be a boolean")
+    end
+    if config.hooks.sync_timeout ~= nil then
+      assert(
+        type(config.hooks.sync_timeout) == "number" and config.hooks.sync_timeout > 0,
+        "hooks.sync_timeout must be a positive number"
+      )
+    end
+  end
+  if config.autosave ~= nil then
+    assert(type(config.autosave) == "boolean", "autosave must be a boolean")
+  end
+  for _, key in ipairs({ "alerts", "follow" }) do
+    if config[key] ~= nil then
+      assert(type(config[key]) == "table", key .. " must be a table")
+      for k, v in pairs(config[key]) do
+        assert(type(v) == "boolean", key .. "." .. tostring(k) .. " must be a boolean")
+      end
+    end
+  end
+  if config.status ~= nil then
+    assert(type(config.status) == "table", "status must be a table")
+    assert(config.status.format == nil or type(config.status.format) == "function", "status.format must be a function")
   end
 
   if config.terminal_context_lines ~= nil then

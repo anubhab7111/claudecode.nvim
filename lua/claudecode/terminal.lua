@@ -37,6 +37,9 @@ M.defaults = defaults
 -- Lazy load providers
 local providers = {}
 
+---@type (fun(): string|nil, table|nil)|nil
+local launch_extras = nil
+
 ---Loads a terminal provider module
 ---@param provider_name string The name of the provider to load
 ---@return ClaudeCodeTerminalProvider? provider The provider module, or nil if loading failed
@@ -378,6 +381,21 @@ local function get_claude_command_and_env(cmd_args)
     env_table[key] = value
   end
 
+  -- Extra launch arguments/env from integrations (hooks/MCP settings files).
+  if launch_extras then
+    local ok, extra_args, extra_env = pcall(launch_extras)
+    if ok then
+      if type(extra_args) == "string" and extra_args ~= "" then
+        cmd_string = cmd_string .. " " .. extra_args
+      end
+      if type(extra_env) == "table" then
+        for key, value in pairs(extra_env) do
+          env_table[key] = value
+        end
+      end
+    end
+  end
+
   -- Issue #70: Claude honors http_proxy/all_proxy (proxy-from-env semantics) and, without a
   -- localhost exclusion, tunnels even its ws://127.0.0.1:<port> IDE connection through the
   -- proxy, so the handshake never reaches our server and queued @ mentions time out. Guarantee
@@ -653,6 +671,24 @@ end
 ---@return number|nil The buffer number if an active terminal is found, otherwise nil.
 function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
+end
+
+---Whether the Claude terminal is currently shown in a (non-hidden) window.
+---Always false for providers that run Claude outside Neovim.
+---@return boolean
+function M.is_visible()
+  local ok, bufnr = pcall(M.get_active_terminal_bufnr)
+  if not ok or not bufnr then
+    return false
+  end
+  return is_terminal_visible(bufnr)
+end
+
+---Register a function that contributes extra CLI arguments and environment
+---variables to every Claude launch (used for the hooks/MCP settings files).
+---@param fn fun(): string|nil, table|nil Returns (args_string, env_table)
+function M.set_launch_extras(fn)
+  launch_extras = fn
 end
 
 ---Sends raw text to the running Claude Code terminal's job channel, as if it were

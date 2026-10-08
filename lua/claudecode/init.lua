@@ -571,11 +571,136 @@ function M.start(show_startup_notification)
     selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms)
   end
 
+  local ok_integrations, integrations_err = pcall(M._start_hooks_bridge)
+  if not ok_integrations then
+    logger.warn("init", "Claude hooks bridge disabled: " .. tostring(integrations_err))
+  end
+
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
   end
 
   return true, M.state.port
+end
+
+---Whether a feature that is configured as `true | false | { enabled = bool }` is on.
+---@param value any
+---@param default boolean
+---@return boolean
+local function feature_enabled(value, default)
+  if value == nil then
+    return default
+  end
+  if type(value) == "table" then
+    return value.enabled ~= false
+  end
+  return value == true
+end
+M._feature_enabled = feature_enabled
+
+---Register the /hook route and the per-session `--settings` file that makes
+---Claude post its hook events to this Neovim. No-op when hooks are disabled.
+function M._start_hooks_bridge()
+  local cfg = M.state.config
+  local server = M.state.server
+  if not (cfg.hooks and cfg.hooks.enabled) or not server or not server.register_http_route then
+    return
+  end
+
+  server.register_http_route("/hook", function(client, req, respond)
+    require("claudecode.hooks").handle_http(client, req, respond)
+  end)
+
+  local status = require("claudecode.status")
+  status.formatter = cfg.status and cfg.status.format or nil
+  status.reset()
+
+  local hooks_settings = require("claudecode.hooks_settings")
+  local path, err = hooks_settings.write(M.state.port, {
+    host = cfg.server_host,
+    sync_timeout = cfg.hooks.sync_timeout,
+    need_pre_tool = cfg.autosave ~= false or feature_enabled(cfg.turn_review, true),
+    plan_review = feature_enabled(cfg.plan_review, true),
+  })
+  if not path then
+    error("could not write hooks settings file: " .. tostring(err))
+  end
+  M.state.hooks_settings_path = path
+
+  local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+  if terminal_ok and terminal.set_launch_extras then
+    terminal.set_launch_extras(function()
+      local args = {}
+      if M.state.hooks_settings_path then
+        args[#args + 1] = "--settings '" .. M.state.hooks_settings_path .. "'"
+      end
+      local extra = M._extra_launch_args and M._extra_launch_args() or nil
+      if extra and extra ~= "" then
+        args[#args + 1] = extra
+      end
+      return table.concat(args, " "), { [hooks_settings.TOKEN_ENV] = M.state.auth_token }
+    end)
+  end
+end
+
+---Undo M._start_hooks_bridge.
+function M._stop_hooks_bridge()
+  local server = M.state.server
+  if server and server.register_http_route then
+    server.register_http_route("/hook", nil)
+  end
+  if M.state.hooks_settings_path then
+    pcall(os.remove, M.state.hooks_settings_path)
+    M.state.hooks_settings_path = nil
+  end
+  local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+  if terminal_ok and terminal.set_launch_extras then
+    terminal.set_launch_extras(nil)
+  end
+  local status = package.loaded["claudecode.status"]
+  if status then
+    status.reset()
+  end
+end
+
+---Shell command line that starts Claude connected to this Neovim with the
+---hooks bridge (for `terminal.provider = "none"`, where you launch Claude yourself).
+---@return string|nil
+function M.launch_command()
+  if not M.state.server or not M.state.port then
+    return nil
+  end
+  local parts = {
+    "ENABLE_IDE_INTEGRATION=true",
+    "CLAUDE_CODE_SSE_PORT=" .. M.state.port,
+  }
+  local cmd = "claude"
+  if M.state.hooks_settings_path then
+    parts[#parts + 1] = require("claudecode.hooks_settings").TOKEN_ENV .. "=" .. M.state.auth_token
+    cmd = cmd .. " --settings '" .. M.state.hooks_settings_path .. "'"
+  end
+  local extra = M._extra_launch_args and M._extra_launch_args() or nil
+  if extra and extra ~= "" then
+    cmd = cmd .. " " .. extra
+  end
+  parts[#parts + 1] = cmd
+  return table.concat(parts, " ")
+end
+
+---Statusline component: Claude's state (working / needs input / done),
+---permission mode, running subagents and todo progress. Returns "" when no
+---session is connected. Cheap: the string is rebuilt only on hook events.
+---@return string
+function M.statusline()
+  local status = package.loaded["claudecode.status"]
+  return status and status.statusline() or ""
+end
+
+---Current Claude session status table (see lua/claudecode/status.lua).
+---@return table|nil
+function M.status()
+  local status = package.loaded["claudecode.status"]
+  return status and status.state or nil
 end
 
 ---Stop the Claude Code integration
@@ -599,6 +724,8 @@ function M.stop()
     local selection = require("claudecode.selection")
     selection.disable()
   end
+
+  pcall(M._stop_hooks_bridge)
 
   local success, error = M.state.server.stop()
 
@@ -1169,6 +1296,18 @@ function M._create_commands()
     end, {
       nargs = "?",
       desc = "Paste another terminal buffer's recent output into the Claude prompt (not submitted)",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeLaunchCmd", function()
+      local line = M.launch_command()
+      if not line then
+        logger.warn("command", "Claude Code integration is not running")
+        return
+      end
+      pcall(vim.fn.setreg, '"', line)
+      vim.api.nvim_echo({ { line, "Normal" }, { "  (yanked to the unnamed register)", "Comment" } }, true, {})
+    end, {
+      desc = "Show (and yank) the shell command to start Claude connected to this Neovim, hooks included",
     })
 
     vim.api.nvim_create_user_command("ClaudeCodeCycleMode", function()
