@@ -51,11 +51,24 @@ function M.find_buffer(path)
     return nil
   end
   local full = vim.fn.fnamemodify(path, ":p")
+  local uv = vim.uv or vim.loop
+  local real = uv and uv.fs_realpath and uv.fs_realpath(full)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(b) then
       local name = vim.api.nvim_buf_get_name(b)
       if name == path or name == full then
         return b
+      end
+    end
+  end
+  -- Same file under another spelling (symlinked directory, `..`, etc.).
+  if real then
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(b) then
+        local name = vim.api.nvim_buf_get_name(b)
+        if name ~= "" and uv.fs_realpath(name) == real then
+          return b
+        end
       end
     end
   end
@@ -101,11 +114,21 @@ function M.follow(payload)
   if follow.checktime == false then
     return
   end
-  local b = M.find_buffer(tool_file(payload))
-  if not b or vim.api.nvim_buf_get_option(b, "modified") then
-    return -- never clobber unsaved edits; autosave normally prevents this
+  local follow_mod = require("claudecode.follow")
+  local file = tool_file(payload)
+  if not file then
+    -- Bash and other tools can change any file: re-check every loaded buffer.
+    follow_mod.check_all()
+    return
   end
-  pcall(vim.cmd, "checktime " .. b)
+  local b = M.find_buffer(file)
+  if not b then
+    return
+  end
+  follow_mod.file_changed(b) -- never clobbers unsaved edits (warns instead)
+  if vim.api.nvim_buf_get_option(b, "modified") then
+    return
+  end
 
   if follow.flash then
     flash_ns = flash_ns or vim.api.nvim_create_namespace("claudecode_follow")
@@ -248,6 +271,11 @@ function M.handle_http(client, req, respond)
     pcall(M.follow, payload)
   elseif ev == "Notification" or ev == "Stop" then
     pcall(M.alert, payload)
+  end
+  if (ev == "Stop" or ev == "SubagentStop") and (config().follow or {}).checktime ~= false then
+    pcall(function()
+      require("claudecode.follow").check_all()
+    end)
   end
   run_listeners(ev, payload)
   fire_user_event(payload)

@@ -926,6 +926,11 @@ local function reload_file_buffers(file_path, original_cursor_pos)
           end
 
           reloaded_count = reloaded_count + 1
+          -- The CLI may write the file after close_tab; re-check shortly after so
+          -- a reload that raced the write does not leave the buffer stale.
+          pcall(function()
+            require("claudecode.follow").file_changed(buf)
+          end)
         end
       end
     end

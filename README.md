@@ -264,7 +264,7 @@ What you get:
 - **Statusline**: `require("claudecode").statusline()` returns e.g. `claude: working · plan · 2 agents · 3/5` (or `""` when no session is connected). It is a cached string, safe to call on every redraw. `User ClaudeCodeStatus` fires when it changes.
 - **Alerts**: `vim.notify` when Claude needs your permission/input or finishes, only while the Claude terminal is hidden (`alerts.only_when_hidden`).
 - **Autosave** (`autosave = true`): a modified buffer is written (`noautocmd update`) right before Claude reads or edits that file, so Claude never works from stale content.
-- **Live reload** (`follow.checktime = true`): after Claude edits a file, that buffer is reloaded immediately. `follow.flash = true` briefly highlights it.
+- **Live reload** (`follow.checktime = true`): buffers without unsaved edits are reloaded whenever Claude changes their file. This covers its Edit/Write tools, Bash commands (`sed`, formatters, version control) and the end of each turn. It works regardless of `'autoread'`, and Neovim re-checks once more 500 ms later in case a formatter run by your own hooks rewrites the file. Leaving the Claude terminal or entering a buffer also re-checks (one `stat` per buffer, works without hooks). If a buffer has unsaved edits, it is left alone and you get a notification instead. `follow.flash = true` briefly highlights it.
 - **Events**: every hook payload is re-emitted as `User ClaudeCodeHook` (`args.data` = the payload).
 
 ```lua

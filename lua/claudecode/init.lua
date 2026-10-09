@@ -575,6 +575,13 @@ function M.start(show_startup_notification)
     selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms)
   end
 
+  local follow_cfg = M.state.config.follow
+  if not (type(follow_cfg) == "table" and follow_cfg.checktime == false) then
+    pcall(function()
+      require("claudecode.follow").setup_autocmds()
+    end)
+  end
+
   local ok_integrations, integrations_err = pcall(M._start_hooks_bridge)
   if not ok_integrations then
     logger.warn("init", "Claude hooks bridge disabled: " .. tostring(integrations_err))
@@ -840,6 +847,7 @@ function M.stop()
     pcall(session.disable)
   end
   pcall(M._stop_hooks_bridge)
+  pcall(vim.api.nvim_del_augroup_by_name, "ClaudeCodeFollow")
 
   local success, error = M.state.server.stop()
 

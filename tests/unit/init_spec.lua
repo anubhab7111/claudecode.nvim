@@ -237,7 +237,13 @@ describe("claudecode.init", function()
       assert(#vim.api.nvim_create_augroup.calls > 0, "nvim_create_augroup was not called")
       assert(#vim.api.nvim_create_autocmd.calls > 0, "nvim_create_autocmd was not called")
 
-      assert(vim.api.nvim_create_autocmd.calls[1].vals[1] == "VimLeavePre", "Expected VimLeavePre event")
+      local found = false
+      for _, call in ipairs(vim.api.nvim_create_autocmd.calls) do
+        if call.vals[1] == "VimLeavePre" then
+          found = true
+        end
+      end
+      assert(found, "Expected VimLeavePre event")
     end)
   end)
 

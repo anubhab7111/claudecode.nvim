@@ -26,6 +26,13 @@
 
 ### Bug Fixes
 
+- Buffers now reliably show Claude's latest changes without reopening the file. Previously only Edit/Write tool calls triggered a reload, so a buffer could stay stale in these cases:
+  - files changed through Bash (`sed`, formatters, version control)
+  - edits racing a formatter hook
+  - users with `noautoread` (W11 prompt)
+  - the diff-accept path (`:edit` racing the CLI's write)
+
+  A buffer with unsaved edits is still never overwritten, and you now get a notification instead of silence.
 - Pressing `Ctrl-Z` in the Claude terminal no longer freezes it. Claude runs without a shell, so its "suspend" stopped the process with no `fg` to resume it. `<C-z>` is now ignored in Claude terminal buffers, and entering the buffer sends `SIGCONT` to a stopped Claude.
 - `closeAllDiffTabs` no longer destroys diffs it does not own. It previously closed every window with `&diff` set and force-deleted any buffer named like `*.diff`/`diff://`/`fugitive://`, so an open diffview.nvim, fugitive, or native `:diffsplit` review was wiped out — and because the Claude CLI calls this tool at the start of every turn, it happened on essentially every prompt. The tool is now scoped to claudecode's own tracked diffs (matching the official VS Code extension, which only closes the tabs it labelled). Relatedly, `openFile`/`openDiff` no longer reuse a window that is in diff mode, which previously `:edit`-ed over one side of an unrelated diff and broke its layout. ([#277](https://github.com/coder/claudecode.nvim/issues/277))
 - The Claude terminal now adds the loopback hosts (`localhost`, `127.0.0.1`, `::1`) to `no_proxy`/`NO_PROXY`, so a configured `http_proxy`/`all_proxy` no longer tunnels Claude's `ws://127.0.0.1` IDE connection and causes queued @ mentions to time out. Existing `no_proxy` exclusions are preserved. ([#70](https://github.com/coder/claudecode.nvim/issues/70))

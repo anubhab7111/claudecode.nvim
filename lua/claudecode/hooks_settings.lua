@@ -58,7 +58,7 @@ function M.build(port, opts)
 
   local hooks = {
     -- Fire-and-forget: Claude never waits on Neovim for these.
-    PostToolUse = group(M.EDIT_TOOLS .. "|TodoWrite", false),
+    PostToolUse = group(M.EDIT_TOOLS .. "|Bash|TodoWrite", false),
     UserPromptSubmit = group(nil, false),
     Stop = group(nil, false),
     Notification = group(nil, false),
