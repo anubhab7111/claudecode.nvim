@@ -399,7 +399,7 @@ Review keys are Vim's own diff verbs, set only on the proposed buffer (they disa
 | `:q`    | reject the whole file                                             |
 | `<C-g>` | accept the file and jump to the next pending diff                 |
 
-The same keys work in the `unified` layout. In the side-by-side layouts `]c`, `[c`, `do` and `u` are simply Vim's built-ins. Remap or disable any key with `diff_opts.keys`:
+The same keys work in the `unified` layout. In the side-by-side layouts `]c`, `[c`, `do` and `u` are simply Vim's built-ins, so use them in Claude's **proposed** pane (where the cursor lands when a diff opens): `do` in the other pane would copy Claude's change into your real buffer instead. Remap or disable any key with `diff_opts.keys`:
 
 ```lua
 diff_opts = {
