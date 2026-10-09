@@ -621,6 +621,7 @@ function M._start_hooks_bridge()
     sync_timeout = cfg.hooks.sync_timeout,
     need_pre_tool = cfg.autosave ~= false or feature_enabled(cfg.turn_review, true),
     plan_review = feature_enabled(cfg.plan_review, true),
+    plan_timeout = type(cfg.plan_review) == "table" and cfg.plan_review.timeout or nil,
   })
   if not path then
     error("could not write hooks settings file: " .. tostring(err))
@@ -1297,6 +1298,22 @@ function M._create_commands()
       nargs = "?",
       desc = "Paste another terminal buffer's recent output into the Claude prompt (not submitted)",
     })
+
+    vim.api.nvim_create_user_command("ClaudeCodeReview", function()
+      require("claudecode.turn_review").open_quickfix()
+    end, { desc = "Quickfix list of every change Claude made in its last turn" })
+
+    vim.api.nvim_create_user_command("ClaudeCodeReviewDiff", function()
+      require("claudecode.turn_review").open_diff()
+    end, { desc = "Diff the current file against its state before Claude's last turn" })
+
+    vim.api.nvim_create_user_command("ClaudeCodeReviewRevert", function()
+      require("claudecode.turn_review").revert_hunk_at_cursor()
+    end, { desc = "Undo Claude's change under the cursor (restores the pre-turn lines)" })
+
+    vim.api.nvim_create_user_command("ClaudeCodePlanApprove", function()
+      require("claudecode.plan_review").approve()
+    end, { desc = "Approve the Claude plan under review" })
 
     vim.api.nvim_create_user_command("ClaudeCodeLaunchCmd", function()
       local line = M.launch_command()

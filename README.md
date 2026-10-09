@@ -290,6 +290,28 @@ follow = { checktime = true, flash = false },
 status = { format = nil }, -- function(state) -> string
 ```
 
+### Plan review in a buffer
+
+When Claude leaves plan mode, its plan opens as a Markdown buffer (new tab by default) and Claude waits for your answer there:
+
+- `ga` approves the plan; Claude starts working.
+- Edit the plan (rewrite steps, add `> comments`) and `:w` to send it back; Claude revises and presents it again. `:w` without changes approves.
+- `q` (or closing the buffer) hands the decision back to the normal dialog in the Claude terminal.
+
+```lua
+plan_review = { enabled = true, layout = "tab", approve_key = "ga", timeout = 3600 }
+```
+
+### Reviewing a whole turn
+
+Even with auto-accepted edits you can review everything Claude changed in its last turn. Before Claude's first edit to a file in a turn, the plugin keeps that file's content in memory; the snapshots are dropped when you send the next prompt.
+
+- `:ClaudeCodeReview` puts every changed hunk in the quickfix list.
+- `:ClaudeCodeReviewDiff` opens a side-by-side diff of the current file against its pre-turn content (use `]c`, `do`, `dp`, `u` as usual).
+- `:ClaudeCodeReviewRevert` restores the pre-turn lines for the hunk under the cursor (an ordinary, undoable edit).
+
+Disable with `turn_review = { enabled = false }`.
+
 With `terminal.provider = "none"` you start Claude yourself: run `:ClaudeCodeLaunchCmd` to print (and yank) the exact command, including the hooks settings and token environment variable.
 
 ## Sending text to the Claude terminal

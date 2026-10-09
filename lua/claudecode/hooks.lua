@@ -166,7 +166,11 @@ local function fire_user_event(payload)
 end
 
 local function encode(tbl)
-  local ok, s = pcall(vim.json.encode, tbl or vim.empty_dict())
+  -- An empty Lua table would encode as `[]`; hook replies must be objects.
+  if type(tbl) ~= "table" or next(tbl) == nil then
+    return "{}"
+  end
+  local ok, s = pcall(vim.json.encode, tbl)
   return ok and s or "{}"
 end
 
@@ -193,6 +197,13 @@ function M.handle_http(_, req, respond)
     if cfg.autosave ~= false then
       pcall(M.autosave, payload)
     end
+    -- Snapshot after autosave so the baseline is what the user had on screen.
+    local tr = cfg.turn_review
+    if tr == nil or tr == true or (type(tr) == "table" and tr.enabled ~= false) then
+      pcall(function()
+        require("claudecode.turn_review").snapshot(payload)
+      end)
+    end
     run_listeners(ev, payload)
     respond(200, "{}")
     fire_user_event(payload)
@@ -218,7 +229,12 @@ function M.handle_http(_, req, respond)
 
   -- Everything else is fire-and-forget: reply first, then do the work.
   respond(200, "{}")
-  if ev == "PostToolUse" then
+  if ev == "UserPromptSubmit" then
+    local tr = package.loaded["claudecode.turn_review"]
+    if tr then
+      tr.reset()
+    end
+  elseif ev == "PostToolUse" then
     pcall(M.follow, payload)
   elseif ev == "Notification" or ev == "Stop" then
     pcall(M.alert, payload)

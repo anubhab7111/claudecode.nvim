@@ -50,6 +50,17 @@ M.defaults = {
   },
   -- Statusline text formatter: function(state) -> string (nil = built-in)
   status = { format = nil },
+  -- Review Claude's plan in a Markdown buffer when it leaves plan mode
+  -- (ga approve · edit + :w send revisions · q use the terminal dialog).
+  plan_review = {
+    enabled = true,
+    layout = "tab", -- "tab" | "split"
+    approve_key = "ga",
+    timeout = 3600, -- seconds before falling back to the terminal dialog
+  },
+  -- Keep a pre-edit snapshot of files Claude touches in a turn, for
+  -- :ClaudeCodeReview / :ClaudeCodeReviewDiff / :ClaudeCodeReviewRevert.
+  turn_review = { enabled = true },
   -- When true, focus Claude terminal after a successful send while connected
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -143,6 +154,35 @@ function M.validate(config)
       end
     end
   end
+  if config.plan_review ~= nil then
+    local pr = config.plan_review
+    assert(type(pr) == "table" or type(pr) == "boolean", "plan_review must be a table or boolean")
+    if type(pr) == "table" then
+      if pr.enabled ~= nil then
+        assert(type(pr.enabled) == "boolean", "plan_review.enabled must be a boolean")
+      end
+      if pr.layout ~= nil then
+        assert(pr.layout == "tab" or pr.layout == "split", "plan_review.layout must be 'tab' or 'split'")
+      end
+      if pr.approve_key ~= nil then
+        assert(
+          pr.approve_key == false or (type(pr.approve_key) == "string" and pr.approve_key ~= ""),
+          "plan_review.approve_key must be a key string or false"
+        )
+      end
+      if pr.timeout ~= nil then
+        assert(type(pr.timeout) == "number" and pr.timeout >= 30, "plan_review.timeout must be a number >= 30")
+      end
+    end
+  end
+  if config.turn_review ~= nil then
+    local tr = config.turn_review
+    assert(type(tr) == "table" or type(tr) == "boolean", "turn_review must be a table or boolean")
+    if type(tr) == "table" and tr.enabled ~= nil then
+      assert(type(tr.enabled) == "boolean", "turn_review.enabled must be a boolean")
+    end
+  end
+
   if config.status ~= nil then
     assert(type(config.status) == "table", "status must be a table")
     assert(config.status.format == nil or type(config.status.format) == "function", "status.format must be a function")

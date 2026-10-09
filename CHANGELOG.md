@@ -4,6 +4,8 @@
 
 ### Features
 
+- Plan review in a buffer ([#179](https://github.com/coder/claudecode.nvim/issues/179)): when Claude exits plan mode its plan opens as Markdown; `ga` approves, editing + `:w` sends your revised plan back as feedback, `q` falls back to the terminal dialog.
+- Turn review: `:ClaudeCodeReview` (quickfix of every hunk Claude changed in its last turn, including auto-accepted edits), `:ClaudeCodeReviewDiff`, `:ClaudeCodeReviewRevert`.
 - Hooks bridge: Claude's HTTP hooks post lifecycle events to Neovim's IDE port (injected per session via `claude --settings`, merged with your own hooks). Adds `require("claudecode").statusline()` (working / needs input / done, permission mode, subagents, todo progress), `vim.notify` alerts while the terminal is hidden ([#216](https://github.com/coder/claudecode.nvim/issues/216)), `autosave` of modified buffers before Claude reads/edits them, immediate reload of buffers Claude edited, `User ClaudeCodeHook`/`ClaudeCodeStatus` autocmds, and `:ClaudeCodeLaunchCmd` for `provider = "none"`.
 - Per-change diff review with Vim's diff verbs ([#169](https://github.com/coder/claudecode.nvim/issues/169)): `]c`/`[c` to move, `do` to reject a change, `dp` to keep it and jump to the next, `u` to undo, `:w` to accept the file with your choices, `<C-g>` to accept and jump to the next pending diff. Works in the side-by-side and `unified` layouts; keys are buffer-local to the proposed buffer and configurable via `diff_opts.keys`.
 - Selected text from secret files (`selection.exclude`: `.env`, `*.pem`, `*.key`, SSH keys, …) is no longer sent to Claude; only the path is shared. `selection.send_file_context = false` stops sharing the file under the cursor when nothing is selected (VS Code's "Attach Open File" off).
