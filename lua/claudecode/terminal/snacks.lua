@@ -399,6 +399,7 @@ function M.open(cmd_string, env_table, config, focus)
     pcall(function()
       vim.b[term_instance.buf].claudecode_terminal = true
     end)
+    utils.guard_claude_terminal(term_instance.buf)
   else
     terminal = nil
     local logger = require("claudecode.logger")

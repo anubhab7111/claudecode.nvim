@@ -232,6 +232,7 @@ local function spawn(s, cmd, env, cfg, focus)
     vim.b[s.buf].claudecode_session = s.id
     vim.bo[s.buf].filetype = "claudecode"
   end)
+  require("claudecode.utils").guard_claude_terminal(s.buf)
   if focus ~= false then
     if cfg.auto_insert ~= false then
       vim.cmd("startinsert")

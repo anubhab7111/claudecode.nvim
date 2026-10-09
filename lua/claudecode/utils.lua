@@ -120,4 +120,39 @@ function M.parse_command(cmd)
   return argv
 end
 
+---Wake a stopped Claude process in terminal buffer `buf` (no-op if running).
+---@param buf integer
+function M.resume_terminal_job(buf)
+  local chan = vim.b[buf] and vim.b[buf].terminal_job_id
+  if not chan or chan <= 0 then
+    return
+  end
+  local ok, pid = pcall(vim.fn.jobpid, chan)
+  local uv = vim.uv or vim.loop
+  if ok and type(pid) == "number" and pid > 0 and uv and uv.kill then
+    pcall(uv.kill, pid, "sigcont")
+  end
+end
+
+---Protect a Claude terminal buffer from job-control suspension. Claude is
+---spawned without a shell, so Ctrl-Z (which Claude handles as "suspend") would
+---stop it with no `fg` to bring it back. Swallow <C-z> in terminal mode and
+---send SIGCONT when the buffer is entered, in case the process was stopped
+---anyway (e.g. `kill -STOP`).
+---@param buf integer
+function M.guard_claude_terminal(buf)
+  if vim.keymap and vim.keymap.set then
+    pcall(vim.keymap.set, "t", "<C-z>", "<Nop>", { buffer = buf, desc = "Claude: ignore suspend" })
+  end
+  if not (vim.api and vim.api.nvim_create_autocmd) then
+    return
+  end
+  pcall(vim.api.nvim_create_autocmd, "BufEnter", {
+    buffer = buf,
+    callback = function(args)
+      M.resume_terminal_job(args.buf)
+    end,
+  })
+end
+
 return M

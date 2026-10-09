@@ -139,6 +139,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.b[bufnr].claudecode_terminal = true
     vim.bo[bufnr].filetype = "claudecode"
   end)
+  utils.guard_claude_terminal(bufnr)
 
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
