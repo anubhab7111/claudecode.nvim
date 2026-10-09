@@ -12,6 +12,26 @@ M.ERROR_CODES = {
 
 M.tools = {}
 
+---Loaders for public tools registered on first use of the `nvim` MCP server
+---(so their code is not loaded at startup).
+---@type function[]
+M.lazy_public = {}
+
+---Run pending lazy public-tool loaders.
+function M.load_lazy()
+  local loaders = M.lazy_public
+  if #loaders == 0 then
+    return
+  end
+  M.lazy_public = {}
+  for _, load in ipairs(loaders) do
+    local ok, err = pcall(load)
+    if not ok then
+      require("claudecode.logger").warn("tools", "failed to load tools: " .. tostring(err))
+    end
+  end
+end
+
 ---Setup the tools module
 function M.setup(server)
   M.server = server
@@ -30,6 +50,9 @@ end
 ---Whether any model-visible (`public`) tool is registered.
 ---@return boolean
 function M.has_public_tools()
+  if #M.lazy_public > 0 then
+    return true
+  end
   for _, tool_data in pairs(M.tools) do
     if tool_data.scope == "public" and tool_data.schema then
       return true
@@ -43,6 +66,9 @@ end
 function M.get_tool_list(kind)
   local tool_list = {}
   local scope = M.scope_for_kind(kind)
+  if scope == "public" then
+    M.load_lazy()
+  end
 
   for name, tool_data in pairs(M.tools) do
     -- Only include tools that have schemas (are meant to be exposed via MCP)
@@ -82,8 +108,10 @@ function M.register_all()
   local cfg = main and main.state and main.state.config or {}
   local lsp_cfg = cfg.lsp_tools
   if lsp_cfg == nil or lsp_cfg == true or (type(lsp_cfg) == "table" and lsp_cfg.enabled ~= false) then
-    for _, tool in ipairs(require("claudecode.tools.lsp").tools()) do
-      M.register(tool)
+    M.lazy_public[#M.lazy_public + 1] = function()
+      for _, tool in ipairs(require("claudecode.tools.lsp").tools()) do
+        M.register(tool)
+      end
     end
   end
 end
@@ -197,6 +225,9 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   local tool_name = params.name
   local input = params.arguments
 
+  if client and client.kind == "tools" then
+    M.load_lazy()
+  end
   local tool_data = tool_name and M.tools[tool_name]
   -- A tool is only callable from the connection kind that lists it.
   if tool_data and (tool_data.scope or "ide") ~= M.scope_for_kind(client and client.kind) then
