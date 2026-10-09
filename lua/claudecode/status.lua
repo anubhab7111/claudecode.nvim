@@ -28,6 +28,14 @@ M.state = {
 
 M._line = ""
 
+---Per-session states in multi-session mode (keyed by our session id).
+---@type table<string, {state: ClaudeCodeStatusState, line: string}>
+M.sessions = {}
+
+local function new_state()
+  return { status = "offline", subagents = 0, todos_done = 0, todos_total = 0 }
+end
+
 local MODE_LABEL = {
   default = "manual",
   acceptEdits = "edits",
@@ -67,18 +75,36 @@ end
 
 M.formatter = nil -- user override
 
-local function rebuild()
+local function render(state)
   local fmt = M.formatter or M.format
-  local ok, line = pcall(fmt, M.state)
-  M._line = (ok and type(line) == "string") and line or ""
+  local ok, line = pcall(fmt, state)
+  return (ok and type(line) == "string") and line or ""
+end
+
+local function rebuild()
+  M._line = render(M.state)
 end
 
 ---Apply a hook payload. Returns true when the visible state changed.
 ---@param p table Hook input JSON
+---@param session_id string|nil Our session id (multi-session); nil = main session
 ---@return boolean changed
-function M.update(p)
+function M.update(p, session_id)
   if type(p) ~= "table" then
     return false
+  end
+  if session_id then
+    local entry = M.sessions[session_id]
+    if not entry then
+      entry = { state = new_state(), line = "" }
+      M.sessions[session_id] = entry
+    end
+    local main_state, main_line = M.state, M._line
+    M.state = entry.state
+    local changed = M.update(p, nil)
+    entry.line = M._line
+    M.state, M._line = main_state, main_line
+    return changed
   end
   local s = M.state
   local before = M._line
@@ -147,8 +173,30 @@ function M.reset()
   rebuild()
 end
 
+---Forget a session's state.
+---@param session_id string
+function M.drop(session_id)
+  M.sessions[session_id] = nil
+end
+
+---Statusline text for a session (default: the current tab's session in
+---multi-session mode, else the main session).
+---@param session_id string|nil
 ---@return string
-function M.statusline()
+function M.statusline(session_id)
+  if not session_id then
+    local server = package.loaded["claudecode.server.init"]
+    if server and server.session_router then
+      session_id = server.session_router()
+      if not session_id then
+        return ""
+      end
+    end
+  end
+  if session_id then
+    local entry = M.sessions[session_id]
+    return entry and entry.line or ""
+  end
   return M._line
 end
 

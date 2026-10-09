@@ -57,6 +57,14 @@ local function handler(params, client)
     })
   end
 
+  -- Multi-session: show the diff in the tab of the Claude session that asked.
+  if client and client.session_id then
+    local session = package.loaded["claudecode.session"]
+    if session then
+      session.focus_tab(client.session_id)
+    end
+  end
+
   local diff_module_ok, diff_module = pcall(require, "claudecode.diff")
   if not diff_module_ok then
     error({ code = -32000, message = "Internal server error", data = "Failed to load diff module" })

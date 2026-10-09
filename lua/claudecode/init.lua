@@ -46,6 +46,10 @@ function M.is_claude_connected()
   end
 
   local server_module = require("claudecode.server.init")
+  -- Multi-session: "connected" means the current tab's Claude is connected.
+  if server_module.session_router and server_module.has_ide_client then
+    return server_module.has_ide_client(server_module.session_router())
+  end
   local status = server_module.get_status()
   if not status.running then
     return false
@@ -581,6 +585,15 @@ function M.start(show_startup_notification)
   end
   M._install_launch_extras()
 
+  if M.state.config.multi_session then
+    local provider = M.state.config.terminal and M.state.config.terminal.provider
+    if provider == "none" or provider == "external" then
+      logger.warn("init", "multi_session needs an in-editor terminal; ignored with provider '" .. provider .. "'")
+    else
+      require("claudecode.session").enable()
+    end
+  end
+
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
   end
@@ -822,6 +835,10 @@ function M.stop()
     selection.disable()
   end
 
+  local session = package.loaded["claudecode.session"]
+  if session then
+    pcall(session.disable)
+  end
   pcall(M._stop_hooks_bridge)
 
   local success, error = M.state.server.stop()
@@ -1394,6 +1411,48 @@ function M._create_commands()
       nargs = "?",
       desc = "Paste another terminal buffer's recent output into the Claude prompt (not submitted)",
     })
+
+    vim.api.nvim_create_user_command("ClaudeCodeResume", function(opts)
+      -- Open Claude's own session picker (or resume a given id/name).
+      local args = "--resume" .. ((opts.args ~= "" and (" " .. opts.args)) or "")
+      local session = package.loaded["claudecode.session"]
+      if session and session.enabled then
+        if session.sessions[vim.api.nvim_get_current_tabpage()] then
+          vim.cmd("tabnew")
+        end
+      elseif terminal.get_active_terminal_bufnr() then
+        logger.warn("command", "Claude is already running; close it first (:ClaudeCodeClose) or use multi_session")
+        return
+      end
+      terminal.open({}, args)
+    end, {
+      nargs = "?",
+      desc = "Resume a past Claude conversation (opens Claude's session picker, or resumes {id|name})",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeSessions", function()
+      local session = package.loaded["claudecode.session"]
+      if not (session and session.enabled) then
+        vim.notify("multi_session is off", vim.log.levels.INFO)
+        return
+      end
+      local items = session.list()
+      if #items == 0 then
+        vim.notify("No Claude sessions", vim.log.levels.INFO)
+        return
+      end
+      vim.ui.select(items, {
+        prompt = "Claude sessions",
+        format_item = function(it)
+          local status = require("claudecode.status").statusline(it.id)
+          return ("tab %d  port %d  %s"):format(vim.api.nvim_tabpage_get_number(it.tab), it.port, status)
+        end,
+      }, function(choice)
+        if choice and vim.api.nvim_tabpage_is_valid(choice.tab) then
+          vim.api.nvim_set_current_tabpage(choice.tab)
+        end
+      end)
+    end, { desc = "Pick a Claude session (multi_session) and jump to its tab" })
 
     vim.api.nvim_create_user_command("ClaudeCodeReview", function()
       require("claudecode.turn_review").open_quickfix()

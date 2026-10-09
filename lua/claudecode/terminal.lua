@@ -40,6 +40,12 @@ local providers = {}
 ---@type (fun(): string|nil, table|nil)|nil
 local launch_extras = nil
 
+---Multi-session hooks (lua/claudecode/session.lua): `provider()` returns the
+---current tab's session provider or nil; `launch()` returns that session's
+---(port, extra_args) for building its Claude command.
+---@type {provider: fun(): table|nil, launch: fun(): (integer|nil, string|nil)}|nil
+local session_hooks = nil
+
 ---Loads a terminal provider module
 ---@param provider_name string The name of the provider to load
 ---@return ClaudeCodeTerminalProvider? provider The provider module, or nil if loading failed
@@ -115,6 +121,14 @@ end
 ---@return ClaudeCodeTerminalProvider provider The terminal provider module (never nil)
 local function get_provider()
   local logger = require("claudecode.logger")
+
+  -- Multi-session: the current tab's session acts as the provider.
+  if session_hooks then
+    local ok, session_provider = pcall(session_hooks.provider)
+    if ok and session_provider then
+      return session_provider
+    end
+  end
 
   -- Handle custom table provider
   if type(defaults.provider) == "table" then
@@ -367,6 +381,14 @@ local function get_claude_command_and_env(cmd_args)
   end
 
   local sse_port_value = server_module().state.port
+  local session_args = nil
+  if session_hooks then
+    local ok, port, args = pcall(session_hooks.launch)
+    if ok and port then
+      sse_port_value = port
+      session_args = args or ""
+    end
+  end
   local env_table = {
     ENABLE_IDE_INTEGRATION = "true",
     FORCE_CODE_TERMINAL = "true",
@@ -384,6 +406,9 @@ local function get_claude_command_and_env(cmd_args)
   -- Extra launch arguments/env from integrations (hooks/MCP settings files).
   if launch_extras then
     local ok, extra_args, extra_env = pcall(launch_extras)
+    if ok and session_args then
+      extra_args = session_args -- the session's own hooks/MCP files
+    end
     if ok then
       if type(extra_args) == "string" and extra_args ~= "" then
         cmd_string = cmd_string .. " " .. extra_args
@@ -682,6 +707,26 @@ function M.is_visible()
     return false
   end
   return is_terminal_visible(bufnr)
+end
+
+---Install (or clear, with nil) the multi-session hooks. See `session_hooks`.
+---@param hooks table|nil
+function M.set_session_hooks(hooks)
+  session_hooks = hooks
+end
+
+---Build the Claude command string and environment (exposed for session.lua).
+---@param cmd_args string|nil
+---@return string cmd, table env
+function M.build_command(cmd_args)
+  return get_claude_command_and_env(cmd_args)
+end
+
+---Effective terminal config (exposed for session.lua).
+---@param opts_override table|nil
+---@return table
+function M.effective_config(opts_override)
+  return build_config(opts_override)
 end
 
 ---Register a function that contributes extra CLI arguments and environment

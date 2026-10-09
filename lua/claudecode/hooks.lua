@@ -150,9 +150,17 @@ function M.alert(payload)
     return
   end
   if alerts.only_when_hidden ~= false then
-    local ok, terminal = pcall(require, "claudecode.terminal")
-    if ok and terminal.is_visible and terminal.is_visible() then
-      return
+    local sid = payload._claudecode_session
+    local session = sid and package.loaded["claudecode.session"]
+    if session then
+      if session.is_visible(sid) then
+        return
+      end
+    else
+      local ok, terminal = pcall(require, "claudecode.terminal")
+      if ok and terminal.is_visible and terminal.is_visible() then
+        return
+      end
     end
   end
   vim.notify(msg, vim.log.levels.INFO, { title = "Claude Code" })
@@ -175,10 +183,10 @@ local function encode(tbl)
 end
 
 ---HTTP route handler for POST /hook.
----@param _ table client
+---@param client table|nil HTTP client (its session_id identifies the session in multi-session mode)
 ---@param req {body: string}
 ---@param respond fun(status: integer, body: string|nil)
-function M.handle_http(_, req, respond)
+function M.handle_http(client, req, respond)
   local ok, payload = pcall(vim.json.decode, req.body or "")
   if not ok or type(payload) ~= "table" then
     respond(400, '{"error":"invalid json"}')
@@ -188,7 +196,9 @@ function M.handle_http(_, req, respond)
   local cfg = config()
 
   local status = require("claudecode.status")
-  if status.update(payload) and vim.api and vim.api.nvim_exec_autocmds then
+  local session_id = client and client.session_id or nil
+  payload._claudecode_session = session_id
+  if status.update(payload, session_id) and vim.api and vim.api.nvim_exec_autocmds then
     pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "ClaudeCodeStatus", modeline = false })
   end
 

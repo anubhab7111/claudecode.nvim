@@ -145,6 +145,7 @@ function M.start(config, auth_token)
 
   M.state.server = server
   M.state.port = server.port
+  M.state.port_range = config.port_range
 
   M.state.ping_timer = tcp_server.start_ping_timer(server, 30000) -- Start ping timer to keep connections alive
 
@@ -444,6 +445,20 @@ function M.send_response(client, id, result, error_data)
   return true
 end
 
+---Optional function returning the session id IDE notifications should go to
+---(set by lua/claudecode/session.lua in multi-session mode). When it returns
+---nil, notifications go to clients of the main listener only.
+---@type (fun(): string|nil)|nil
+M.session_router = nil
+
+---Whether a client should receive IDE notifications for the routed session.
+---@param client table
+---@param target string|nil
+---@return boolean
+local function routed_to(client, target)
+  return client.kind ~= "tools" and client.kind ~= "http" and client.session_id == target
+end
+
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table|nil The parameters to send
@@ -460,8 +475,52 @@ function M.broadcast(method, params)
   }
 
   local json_message = vim.json.encode(message)
-  tcp_server.broadcast(M.state.server, json_message)
+  if M.session_router then
+    -- Multi-session: only the current tab's Claude gets selection/@-mentions.
+    local target = M.session_router()
+    for _, client in pairs(M.state.server.clients) do
+      if routed_to(client, target) then
+        tcp_server.send_to_client(M.state.server, client.id, json_message)
+      end
+    end
+  else
+    tcp_server.broadcast(M.state.server, json_message)
+  end
   return true
+end
+
+---Whether an IDE client has completed its handshake for a session (nil = main).
+---@param session_id string|nil
+---@return boolean
+function M.has_ide_client(session_id)
+  if not M.state.server then
+    return false
+  end
+  for _, client in pairs(M.state.server.clients) do
+    if client.handshake_complete and routed_to(client, session_id) then
+      return true
+    end
+  end
+  return false
+end
+
+---Open a listener for a multi-session Claude session.
+---@param session_id string
+---@return integer|nil port, string|nil err
+function M.add_session_listener(session_id)
+  if not M.state.server then
+    return nil, "server not running"
+  end
+  local range = M.state.port_range or { min = 10000, max = 65535 }
+  return tcp_server.add_listener(M.state.server, range.min, range.max, session_id)
+end
+
+---Close a session listener (disconnecting its clients).
+---@param session_id string
+function M.remove_session_listener(session_id)
+  if M.state.server then
+    tcp_server.remove_listener(M.state.server, session_id)
+  end
 end
 
 ---Send a notification to every client of one connection kind.

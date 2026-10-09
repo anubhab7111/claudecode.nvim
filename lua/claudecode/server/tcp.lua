@@ -106,9 +106,10 @@ end
 ---handle we listened on removes the probe/rebind TOCTOU window.
 ---@param server TCPServer The server object whose connection handler to wire up
 ---@param port number Port to bind and listen on
+---@param session_id string|nil Tag for connections accepted on this listener (multi-session)
 ---@return table|nil handle The bound+listening TCP handle, or nil on failure
 ---@return string|nil error Error message if failed
-function M._bind_and_listen(server, port)
+function M._bind_and_listen(server, port, session_id)
   local handle = vim.loop.new_tcp()
   if not handle then
     return nil, "Failed to create TCP server"
@@ -126,7 +127,7 @@ function M._bind_and_listen(server, port)
       return
     end
 
-    M._handle_new_connection(server)
+    M._handle_new_connection(server, handle, session_id)
   end)
 
   if not listen_success then
@@ -197,14 +198,16 @@ end
 
 ---Handle a new client connection
 ---@param server TCPServer The server object
-function M._handle_new_connection(server)
+---@param listen_handle table|nil Listener that accepted it (default: the main one)
+---@param session_id string|nil Session tag of that listener
+function M._handle_new_connection(server, listen_handle, session_id)
   local client_tcp = vim.loop.new_tcp()
   if not client_tcp then
     server.on_error("Failed to create client TCP handle")
     return
   end
 
-  local accept_success, accept_err = server.server:accept(client_tcp)
+  local accept_success, accept_err = (listen_handle or server.server):accept(client_tcp)
   if not accept_success then
     server.on_error("Failed to accept connection: " .. (accept_err or "unknown error"))
     client_tcp:close()
@@ -213,6 +216,7 @@ function M._handle_new_connection(server)
 
   -- Create WebSocket client wrapper
   local client = client_manager.create_client(client_tcp)
+  client.session_id = session_id
   server.clients[client.id] = client
 
   -- Set up data handler
@@ -357,9 +361,59 @@ function M.close_client(server, client_id, code, reason)
   end
 end
 
+---Open an extra listener whose connections are tagged with `session_id`
+---(one per Claude session in multi-session mode). Shares callbacks, auth and
+---client table with the main listener.
+---@param server TCPServer
+---@param min_port integer
+---@param max_port integer
+---@param session_id string
+---@return integer|nil port, string|nil err
+function M.add_listener(server, min_port, max_port, session_id)
+  server.listeners = server.listeners or {}
+  local last_err
+  for port in port_iterator(min_port, max_port) do
+    local handle, err = M._bind_and_listen(server, port, session_id)
+    if handle then
+      server.listeners[session_id] = { handle = handle, port = port }
+      return port, nil
+    end
+    last_err = err
+  end
+  return nil, last_err or "no free port"
+end
+
+---Close a session listener and disconnect its clients.
+---@param server TCPServer
+---@param session_id string
+function M.remove_listener(server, session_id)
+  local entry = server.listeners and server.listeners[session_id]
+  if not entry then
+    return
+  end
+  server.listeners[session_id] = nil
+  if entry.handle and not entry.handle:is_closing() then
+    entry.handle:close()
+  end
+  for _, client in pairs(server.clients) do
+    if client.session_id == session_id then
+      client_manager.close_client(client, 1001, "Session closed")
+      M._disconnect_client(server, client, 1001, "Session closed")
+    end
+  end
+end
+
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
+  for sid in pairs(server.listeners or {}) do
+    local entry = server.listeners[sid]
+    if entry.handle and not entry.handle:is_closing() then
+      entry.handle:close()
+    end
+  end
+  server.listeners = {}
+
   -- Close all clients
   for _, client in pairs(server.clients) do
     client_manager.close_client(client, 1001, "Server shutting down")

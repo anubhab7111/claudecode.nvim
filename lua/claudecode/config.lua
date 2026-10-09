@@ -61,6 +61,11 @@ M.defaults = {
   -- Keep a pre-edit snapshot of files Claude touches in a turn, for
   -- :ClaudeCodeReview / :ClaudeCodeReviewDiff / :ClaudeCodeReviewRevert.
   turn_review = { enabled = true },
+  -- One Claude per tabpage: each tab gets its own Claude terminal, IDE
+  -- listener and lock file; selection/@-mentions go to the current tab's
+  -- Claude. Uses a built-in split terminal (native/snacks/custom providers
+  -- are bypassed); not available with provider "none"/"external".
+  multi_session = false,
   -- Read-only LSP tools for Claude (lspDefinition, lspReferences, lspHover,
   -- lspDocumentSymbols, lspWorkspaceSymbols), served by the `nvim` MCP server
   -- and backed by the language servers already running in Neovim.
@@ -204,6 +209,10 @@ function M.validate(config)
         end
       end
     end
+  end
+
+  if config.multi_session ~= nil then
+    assert(type(config.multi_session) == "boolean", "multi_session must be a boolean")
   end
 
   if config.status ~= nil then

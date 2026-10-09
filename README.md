@@ -314,6 +314,19 @@ Disable with `turn_review = { enabled = false }`.
 
 With `terminal.provider = "none"` you start Claude yourself: run `:ClaudeCodeLaunchCmd` to print (and yank) the exact command, including the hooks settings and token environment variable.
 
+## Multiple Claude sessions (one per tab)
+
+```lua
+require("claudecode").setup({ multi_session = true })
+```
+
+Each tabpage gets its own Claude: `:ClaudeCode` in a tab opens (or toggles) that tab's Claude in a split. Every session has its own IDE listener and lock file, so selections, `@`-mentions and `:ClaudeCodeSend`/`:ClaudeCodeAdd` go to the Claude in the current tab, diffs open in the tab of the session that proposed them, and the statusline shows the current tab's session. Combine with `:tcd` to run Claude on a different project per tab. Closing a tab stops its session; tabs that never open Claude cost nothing.
+
+- `:ClaudeCodeSessions` - pick a session and jump to its tab
+- `:ClaudeCodeResume [id|name]` - resume a past conversation (Claude's own picker without an argument); in multi-session mode it opens in a new tab when the current one already has a session
+
+Multi-session uses a built-in split terminal (the `snacks`/custom providers are bypassed) and is not available with `provider = "none"`/`"external"`. Run Claude in an isolated git worktree by passing CLI flags as usual, e.g. `:ClaudeCode -w feature-x`.
+
 ## Neovim tools for Claude: LSP and your own
 
 Besides the hidden IDE connection, the plugin serves a model-visible MCP server named `nvim` on the same port (`ws://127.0.0.1:<port>/mcp`, same auth token). It is registered per session with `claude --mcp-config=<file>`, so Claude sees its tools as `mcp__nvim__*`.
