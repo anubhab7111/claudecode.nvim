@@ -3,9 +3,12 @@
 ---
 ---The file is passed to the CLI with `--settings <file>`. Claude Code merges
 ---list-valued settings across sources, so these hooks are added alongside the
----user's own hooks rather than replacing them. The auth token is never written
----to disk: the header references `${CLAUDECODE_TOKEN}`, which Claude expands
----from the terminal environment (listed in `allowedEnvVars`).
+---user's own hooks rather than replacing them. The auth token is written into
+---the file itself (mode 0600, dir 0700) -- the same secret already sits in the
+---lock file under ~/.claude/ide/. An env-var reference (`${CLAUDECODE_TOKEN}`)
+---is not enough: when a session is moved to the background, the Claude daemon
+---respawns it with the same `--settings` but without Neovim's environment, so
+---the header expanded to "" and every hook got HTTP 401.
 ---@module 'claudecode.hooks_settings'
 local M = {}
 
@@ -28,9 +31,17 @@ function M.hook_url(port, host)
   return "http://" .. h .. ":" .. port .. "/hook"
 end
 
+---Auth header for hook/MCP requests. Uses the literal token when given and
+---falls back to the env-var reference otherwise.
+---@param token string|nil
+---@return table headers
+function M.auth_headers(token)
+  return { ["x-claude-code-ide-authorization"] = token or ("${" .. M.TOKEN_ENV .. "}") }
+end
+
 ---Build the settings table.
 ---@param port integer
----@param opts {host: string|nil, sync_timeout: number|nil, need_pre_tool: boolean|nil, plan_review: boolean|nil, plan_timeout: number|nil}
+---@param opts {token: string|nil, host: string|nil, sync_timeout: number|nil, need_pre_tool: boolean|nil, plan_review: boolean|nil, plan_timeout: number|nil}
 ---@return table settings
 function M.build(port, opts)
   opts = opts or {}
@@ -39,8 +50,7 @@ function M.build(port, opts)
     local h = {
       type = "http",
       url = url,
-      headers = { ["x-claude-code-ide-authorization"] = "${" .. M.TOKEN_ENV .. "}" },
-      allowedEnvVars = { M.TOKEN_ENV },
+      headers = M.auth_headers(opts.token),
       timeout = timeout or 5,
     }
     if not sync then
@@ -118,15 +128,16 @@ end
 ---server (WebSocket on the IDE port, path /mcp).
 ---@param port integer
 ---@param host string|nil
+---@param token string|nil
 ---@return table
-function M.build_mcp(port, host)
+function M.build_mcp(port, host, token)
   local url = M.hook_url(port, host):gsub("^http://", "ws://"):gsub("/hook$", "/mcp")
   return {
     mcpServers = {
       nvim = {
         type = "ws",
         url = url,
-        headers = { ["x-claude-code-ide-authorization"] = "${" .. M.TOKEN_ENV .. "}" },
+        headers = M.auth_headers(token),
       },
     },
   }
@@ -135,12 +146,13 @@ end
 ---Write the MCP config file (mode 0600).
 ---@param port integer
 ---@param host string|nil
+---@param token string|nil
 ---@return string|nil path, string|nil err
-function M.write_mcp(port, host)
+function M.write_mcp(port, host, token)
   local dir = M.dir()
   pcall(vim.fn.mkdir, dir, "p", 448)
   local path = dir .. "/mcp-" .. port .. ".json"
-  local ok, encoded = pcall(vim.json.encode, M.build_mcp(port, host))
+  local ok, encoded = pcall(vim.json.encode, M.build_mcp(port, host, token))
   if not ok then
     return nil, tostring(encoded)
   end
@@ -151,6 +163,7 @@ function M.write_mcp(port, host)
   end
   uv.fs_write(fd, encoded, 0)
   uv.fs_close(fd)
+  pcall(uv.fs_chmod, path, 384)
   return path, nil
 end
 

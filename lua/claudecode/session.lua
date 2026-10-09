@@ -85,6 +85,7 @@ function M.start(tab)
   local args = {}
   if cfg.hooks and cfg.hooks.enabled and m.state.hooks_settings_path then
     local path = hs.write(port, {
+      token = m.state.auth_token,
       host = cfg.server_host,
       sync_timeout = cfg.hooks.sync_timeout,
       need_pre_tool = cfg.autosave ~= false or m._feature_enabled(cfg.turn_review, true),
@@ -97,7 +98,7 @@ function M.start(tab)
     end
   end
   if m.state.mcp_config_path then
-    local path = hs.write_mcp(port, cfg.server_host)
+    local path = hs.write_mcp(port, cfg.server_host, m.state.auth_token)
     if path then
       args[#args + 1] = "--mcp-config='" .. path .. "'"
       session.files[#session.files + 1] = path

@@ -8,14 +8,22 @@ describe("hooks_settings", function()
     hs = require("claudecode.hooks_settings")
   end)
 
-  it("points every hook at the IDE port with an env-expanded token header", function()
-    local s = hs.build(4242, {})
+  it("points every hook at the IDE port with the literal token header", function()
+    local s = hs.build(4242, { token = "abc123" })
     local h = s.hooks.Stop[1].hooks[1]
     assert.are.equal("http", h.type)
     assert.are.equal("http://127.0.0.1:4242/hook", h.url)
-    assert.are.equal("${CLAUDECODE_TOKEN}", h.headers["x-claude-code-ide-authorization"])
-    assert.are.same({ "CLAUDECODE_TOKEN" }, h.allowedEnvVars)
+    -- Literal, not ${CLAUDECODE_TOKEN}: a session respawned by the background
+    -- daemon has no Neovim env, so the reference expanded to "" (HTTP 401).
+    assert.are.equal("abc123", h.headers["x-claude-code-ide-authorization"])
+    assert.is_nil(h.allowedEnvVars)
     assert.is_true(h.async)
+  end)
+
+  it("puts the literal token in the MCP config header", function()
+    local m = hs.build_mcp(4242, nil, "abc123")
+    assert.are.equal("ws://127.0.0.1:4242/mcp", m.mcpServers.nvim.url)
+    assert.are.equal("abc123", m.mcpServers.nvim.headers["x-claude-code-ide-authorization"])
   end)
 
   it("only adds synchronous hooks for features that need them", function()

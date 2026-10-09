@@ -642,6 +642,7 @@ function M._start_hooks_bridge()
 
   local hooks_settings = require("claudecode.hooks_settings")
   local path, err = hooks_settings.write(M.state.port, {
+    token = M.state.auth_token,
     host = cfg.server_host,
     sync_timeout = cfg.hooks.sync_timeout,
     need_pre_tool = cfg.autosave ~= false or feature_enabled(cfg.turn_review, true),
@@ -661,7 +662,8 @@ function M._start_tools_server()
   if not tools or not tools.has_public_tools() then
     return
   end
-  local path, err = require("claudecode.hooks_settings").write_mcp(M.state.port, M.state.config.server_host)
+  local path, err =
+    require("claudecode.hooks_settings").write_mcp(M.state.port, M.state.config.server_host, M.state.auth_token)
   if not path then
     error("could not write MCP config file: " .. tostring(err))
   end

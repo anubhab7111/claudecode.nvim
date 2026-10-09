@@ -174,7 +174,7 @@ claudecode.nvim follows the same architecture as the JetBrains plugin: the real 
 
 Modules built on this routing (all lazily required on first use):
 
-- `hooks_settings.lua` writes the per-session `--settings` file (HTTP hooks → `POST /hook`, token via `${CLAUDECODE_TOKEN}`) and the `--mcp-config=` file for the `nvim` server. Only `PreToolUse` (autosave/turn snapshots) and `PermissionRequest`/ExitPlanMode (plan review) are synchronous; the rest are `async`.
+- `hooks_settings.lua` writes the per-session `--settings` file (HTTP hooks → `POST /hook`, literal auth token in the 0600 file so sessions respawned by the background daemon without Neovim's env still authenticate) and the `--mcp-config=` file for the `nvim` server. Only `PreToolUse` (autosave/turn snapshots) and `PermissionRequest`/ExitPlanMode (plan review) are synchronous; the rest are `async`.
 - `hooks.lua` dispatches hook events: `status.lua` (cached statusline), alerts, autosave, `follow.lua` (reload changed buffers), `plan_review.lua`, `turn_review.lua`, and `User ClaudeCodeHook`.
 - `tools/lsp.lua` + `register_tool()` provide `public`-scope tools served only on `/mcp`; `tools.await()` is the generic deferred-response helper.
 - `diff_keys.lua` adds buffer-local per-hunk review keys (native diff verbs).
