@@ -323,7 +323,8 @@ end
 function M.register_handlers()
   M.state.handlers = {
     ["initialize"] = function(client, params)
-      return {
+      local is_tools = client and client.kind == "tools"
+      local result = {
         protocolVersion = M.negotiate_protocol_version(params and params.protocolVersion),
         capabilities = {
           logging = vim.empty_dict(), -- Ensure this is an object {} not an array []
@@ -331,10 +332,16 @@ function M.register_handlers()
           tools = { listChanged = true },
         },
         serverInfo = {
-          name = "claudecode-neovim",
+          name = is_tools and "nvim" or "claudecode-neovim",
           version = claudecode_main.version:string(),
         },
       }
+      if is_tools then
+        result.instructions = "Tools that query the user's running Neovim: its language servers "
+          .. "(definitions, references, hover, symbols) and any tools the user registered. "
+          .. "Lines and columns are 1-based."
+      end
+      return result
     end,
 
     ["notifications/initialized"] = function(client, params) -- Added handler for initialized notification
@@ -348,7 +355,7 @@ function M.register_handlers()
 
     ["tools/list"] = function(client, params)
       return {
-        tools = tools.get_tool_list(),
+        tools = tools.get_tool_list(client and client.kind),
       }
     end,
 
@@ -455,6 +462,21 @@ function M.broadcast(method, params)
   local json_message = vim.json.encode(message)
   tcp_server.broadcast(M.state.server, json_message)
   return true
+end
+
+---Send a notification to every client of one connection kind.
+---@param kind string "ide" | "tools"
+---@param method string
+---@param params table|nil
+function M.notify_kind(kind, method, params)
+  if not M.state.server then
+    return
+  end
+  for _, client in pairs(M.state.server.clients) do
+    if client.kind == kind then
+      M.send(client, method, params)
+    end
+  end
 end
 
 ---Get server status information

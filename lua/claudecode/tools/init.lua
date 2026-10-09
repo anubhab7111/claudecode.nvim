@@ -19,13 +19,35 @@ function M.setup(server)
   M.register_all()
 end
 
+---Tool scope served to a connection kind: the hidden IDE socket gets the
+---`ide` tools, the model-visible `nvim` MCP socket (GET /mcp) gets `public` ones.
+---@param kind string|nil client.kind
+---@return "ide"|"public"
+function M.scope_for_kind(kind)
+  return kind == "tools" and "public" or "ide"
+end
+
+---Whether any model-visible (`public`) tool is registered.
+---@return boolean
+function M.has_public_tools()
+  for _, tool_data in pairs(M.tools) do
+    if tool_data.scope == "public" and tool_data.schema then
+      return true
+    end
+  end
+  return false
+end
+
 ---Get the complete tool list for MCP tools/list handler
-function M.get_tool_list()
+---@param kind string|nil Connection kind (see server/client.lua); nil = IDE socket
+function M.get_tool_list(kind)
   local tool_list = {}
+  local scope = M.scope_for_kind(kind)
 
   for name, tool_data in pairs(M.tools) do
     -- Only include tools that have schemas (are meant to be exposed via MCP)
-    if tool_data.schema then
+    -- and that belong to the requesting connection's scope.
+    if tool_data.schema and (tool_data.scope or "ide") == scope then
       local tool_def = {
         name = name,
         description = tool_data.schema.description,
@@ -54,6 +76,16 @@ function M.register_all()
 
   -- Register internal tools without schemas (not exposed via MCP)
   M.register(require("claudecode.tools.close_tab"))
+
+  -- Model-visible tools on the `nvim` MCP socket (GET /mcp).
+  local main = package.loaded["claudecode"]
+  local cfg = main and main.state and main.state.config or {}
+  local lsp_cfg = cfg.lsp_tools
+  if lsp_cfg == nil or lsp_cfg == true or (type(lsp_cfg) == "table" and lsp_cfg.enabled ~= false) then
+    for _, tool in ipairs(require("claudecode.tools.lsp").tools()) do
+      M.register(tool)
+    end
+  end
 end
 
 ---Register a tool
@@ -77,7 +109,87 @@ function M.register(tool_module)
     handler = tool_module.handler,
     schema = tool_module.schema, -- Will be nil if not defined in the module
     requires_coroutine = tool_module.requires_coroutine, -- Will be nil if not defined in the module
+    scope = tool_module.scope or "ide",
   }
+end
+
+---Suspend a coroutine tool until `start(done)` calls `done(...)` or the timeout
+---expires (then returns nil, "timeout"). Use inside a `requires_coroutine` tool
+---handler; when the handler finishes after resuming, its return value is sent
+---as the deferred MCP response.
+---@param start fun(done: fun(...))
+---@param timeout_ms integer|nil Default 5000
+---@return any ...
+function M.await(start, timeout_ms)
+  local co = coroutine.running()
+  assert(co, "tools.await must be called from a coroutine tool (requires_coroutine = true)")
+  local finished = false
+  local timer
+
+  local function done(...)
+    if finished then
+      return
+    end
+    finished = true
+    if timer then
+      pcall(function()
+        timer:stop()
+        timer:close()
+      end)
+    end
+    local args = { n = select("#", ...), ... }
+    vim.schedule(function()
+      local ok, ret, ret2 = coroutine.resume(co, unpack(args, 1, args.n))
+      if coroutine.status(co) ~= "dead" then
+        return -- awaiting again
+      end
+      local key = tostring(co)
+      local sender = _G.claude_deferred_responses and _G.claude_deferred_responses[key]
+      if not sender then
+        return
+      end
+      _G.claude_deferred_responses[key] = nil
+      sender(M.normalize_result(ok, ret, ret2))
+    end)
+  end
+
+  local uv = vim.uv or vim.loop
+  timer = uv.new_timer()
+  if timer then
+    timer:start(timeout_ms or 5000, 0, function()
+      done(nil, "timeout")
+    end)
+  end
+  local ok, err = pcall(start, done)
+  if not ok then
+    done(nil, tostring(err))
+  end
+  return coroutine.yield()
+end
+
+---Turn a coroutine tool's outcome into the `{content=...}` / `{error=...}`
+---shape the deferred-response sender expects.
+---@param ok boolean coroutine.resume success
+---@param ret any First return value (or the error)
+---@param ret2 any Second return value
+---@return table
+function M.normalize_result(ok, ret, ret2)
+  local function as_error(e, fallback)
+    if type(e) == "table" and e.code and e.message then
+      return { error = { code = e.code, message = e.message, data = e.data } }
+    end
+    return { error = { code = M.ERROR_CODES.INTERNAL_ERROR, message = fallback, data = tostring(e) } }
+  end
+  if not ok then
+    return as_error(ret, "Tool execution failed")
+  end
+  if ret == false then
+    return as_error(ret2, type(ret2) == "string" and ret2 or "Tool reported an error")
+  end
+  if type(ret) == "table" and ret.content then
+    return ret
+  end
+  return as_error(ret, "Tool returned an unexpected value")
 end
 
 ---Handle an invocation of a tool
@@ -85,16 +197,19 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   local tool_name = params.name
   local input = params.arguments
 
-  if not M.tools[tool_name] then
+  local tool_data = tool_name and M.tools[tool_name]
+  -- A tool is only callable from the connection kind that lists it.
+  if tool_data and (tool_data.scope or "ide") ~= M.scope_for_kind(client and client.kind) then
+    tool_data = nil
+  end
+  if not tool_data then
     return {
       error = {
         code = -32601, -- JSON-RPC Method not found
-        message = "Tool not found: " .. tool_name,
+        message = "Tool not found: " .. tostring(tool_name),
       },
     }
   end
-
-  local tool_data = M.tools[tool_name]
   -- Tool handlers are now expected to:
   -- 1. Raise an error (e.g., error({code=..., message=...}) or error("string"))
   -- 2. Return (false, "error message string" or {code=..., message=...}) for pcall-style errors
@@ -131,7 +246,7 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     )
     pcall_results = { success, result }
   else
-    pcall_results = { pcall(tool_data.handler, input) }
+    pcall_results = { pcall(tool_data.handler, input, client) }
   end
   local pcall_success = pcall_results[1]
   local handler_return_val1 = pcall_results[2]

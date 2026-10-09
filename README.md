@@ -314,6 +314,42 @@ Disable with `turn_review = { enabled = false }`.
 
 With `terminal.provider = "none"` you start Claude yourself: run `:ClaudeCodeLaunchCmd` to print (and yank) the exact command, including the hooks settings and token environment variable.
 
+## Neovim tools for Claude: LSP and your own
+
+Besides the hidden IDE connection, the plugin serves a model-visible MCP server named `nvim` on the same port (`ws://127.0.0.1:<port>/mcp`, same auth token). It is registered per session with `claude --mcp-config=<file>`, so Claude sees its tools as `mcp__nvim__*`.
+
+**LSP tools** reuse the language servers already running in Neovim, so Claude gets your exact LSP setup without starting duplicate servers:
+
+| Tool                  | What it returns                                                   |
+| --------------------- | ----------------------------------------------------------------- |
+| `lspDefinition`       | where a symbol is defined                                         |
+| `lspReferences`       | every reference to a symbol                                       |
+| `lspHover`            | type signature and docs                                           |
+| `lspDocumentSymbols`  | functions/classes/variables in a file                             |
+| `lspWorkspaceSymbols` | project-wide symbol search                                        |
+
+Positions are a 1-based `line` plus the `symbol` text on that line. A file that is not open is loaded (hidden, then released) only when an already-running server covers it; the tools never start a new language server. Results are capped (`max_results`, ~20k characters).
+
+```lua
+lsp_tools = { enabled = true, max_results = 100, timeout_ms = 5000 },
+```
+
+**Your own tools**:
+
+```lua
+require("claudecode").register_tool({
+  name = "runTests",
+  description = "Run the test file and return a summary",
+  inputSchema = { type = "object", properties = { file = { type = "string" } }, required = { "file" } },
+  handler = function(input)
+    local out = vim.fn.system({ "pytest", "-q", input.file })
+    return out -- a string, a table (sent as JSON), or a full MCP { content = {...} } result
+  end,
+})
+```
+
+Set `async = true` and call `require("claudecode.tools.init").await(function(done) ... end)` inside the handler for work that completes in a callback (jobs, LSP requests) without blocking Neovim.
+
 ## Sending text to the Claude terminal
 
 `:ClaudeCodeSendText {text}` types `{text}` into the open Claude terminal and submits it — useful for scripting and keymaps. Use `:ClaudeCodeSendText!` to insert the text without submitting. The same is available programmatically:

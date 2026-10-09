@@ -114,6 +114,46 @@ function M.write(port, opts)
   return path, nil
 end
 
+---Build the `--mcp-config` table registering the model-visible `nvim` MCP
+---server (WebSocket on the IDE port, path /mcp).
+---@param port integer
+---@param host string|nil
+---@return table
+function M.build_mcp(port, host)
+  local url = M.hook_url(port, host):gsub("^http://", "ws://"):gsub("/hook$", "/mcp")
+  return {
+    mcpServers = {
+      nvim = {
+        type = "ws",
+        url = url,
+        headers = { ["x-claude-code-ide-authorization"] = "${" .. M.TOKEN_ENV .. "}" },
+      },
+    },
+  }
+end
+
+---Write the MCP config file (mode 0600).
+---@param port integer
+---@param host string|nil
+---@return string|nil path, string|nil err
+function M.write_mcp(port, host)
+  local dir = M.dir()
+  pcall(vim.fn.mkdir, dir, "p", 448)
+  local path = dir .. "/mcp-" .. port .. ".json"
+  local ok, encoded = pcall(vim.json.encode, M.build_mcp(port, host))
+  if not ok then
+    return nil, tostring(encoded)
+  end
+  local uv = vim.uv or vim.loop
+  local fd, err = uv.fs_open(path, "w", 384)
+  if not fd then
+    return nil, err
+  end
+  uv.fs_write(fd, encoded, 0)
+  uv.fs_close(fd)
+  return path, nil
+end
+
 ---Remove the settings file for a port (ignores errors).
 ---@param port integer|nil
 function M.remove(port)

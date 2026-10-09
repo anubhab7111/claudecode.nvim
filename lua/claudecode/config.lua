@@ -61,6 +61,14 @@ M.defaults = {
   -- Keep a pre-edit snapshot of files Claude touches in a turn, for
   -- :ClaudeCodeReview / :ClaudeCodeReviewDiff / :ClaudeCodeReviewRevert.
   turn_review = { enabled = true },
+  -- Read-only LSP tools for Claude (lspDefinition, lspReferences, lspHover,
+  -- lspDocumentSymbols, lspWorkspaceSymbols), served by the `nvim` MCP server
+  -- and backed by the language servers already running in Neovim.
+  lsp_tools = {
+    enabled = true,
+    max_results = 100,
+    timeout_ms = 5000,
+  },
   -- When true, focus Claude terminal after a successful send while connected
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -180,6 +188,21 @@ function M.validate(config)
     assert(type(tr) == "table" or type(tr) == "boolean", "turn_review must be a table or boolean")
     if type(tr) == "table" and tr.enabled ~= nil then
       assert(type(tr.enabled) == "boolean", "turn_review.enabled must be a boolean")
+    end
+  end
+
+  if config.lsp_tools ~= nil then
+    local lt = config.lsp_tools
+    assert(type(lt) == "table" or type(lt) == "boolean", "lsp_tools must be a table or boolean")
+    if type(lt) == "table" then
+      if lt.enabled ~= nil then
+        assert(type(lt.enabled) == "boolean", "lsp_tools.enabled must be a boolean")
+      end
+      for _, k in ipairs({ "max_results", "timeout_ms" }) do
+        if lt[k] ~= nil then
+          assert(type(lt[k]) == "number" and lt[k] > 0, "lsp_tools." .. k .. " must be a positive number")
+        end
+      end
     end
   end
 

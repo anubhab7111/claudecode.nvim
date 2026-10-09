@@ -575,6 +575,11 @@ function M.start(show_startup_notification)
   if not ok_integrations then
     logger.warn("init", "Claude hooks bridge disabled: " .. tostring(integrations_err))
   end
+  local ok_tools, tools_err = pcall(M._start_tools_server)
+  if not ok_tools then
+    logger.warn("init", "Neovim MCP tools server disabled: " .. tostring(tools_err))
+  end
+  M._install_launch_extras()
 
   if show_startup_notification then
     logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
@@ -627,19 +632,46 @@ function M._start_hooks_bridge()
     error("could not write hooks settings file: " .. tostring(err))
   end
   M.state.hooks_settings_path = path
+end
 
+---Write the `--mcp-config` file for the model-visible `nvim` MCP server
+---(GET /mcp on the IDE port) when at least one public tool is registered.
+function M._start_tools_server()
+  local tools = package.loaded["claudecode.tools.init"]
+  if not tools or not tools.has_public_tools() then
+    return
+  end
+  local path, err = require("claudecode.hooks_settings").write_mcp(M.state.port, M.state.config.server_host)
+  if not path then
+    error("could not write MCP config file: " .. tostring(err))
+  end
+  M.state.mcp_config_path = path
+end
+
+---Extra CLI arguments for Claude launches (hooks settings + MCP config).
+---@return string
+function M._launch_args()
+  local args = {}
+  if M.state.hooks_settings_path then
+    args[#args + 1] = "--settings '" .. M.state.hooks_settings_path .. "'"
+  end
+  if M.state.mcp_config_path then
+    args[#args + 1] = "--mcp-config='" .. M.state.mcp_config_path .. "'" -- '=' form: the flag is variadic
+  end
+  return table.concat(args, " ")
+end
+
+---Make the terminal module add M._launch_args() and the token env var to
+---every Claude launch.
+function M._install_launch_extras()
+  if not (M.state.hooks_settings_path or M.state.mcp_config_path) then
+    return
+  end
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if terminal_ok and terminal.set_launch_extras then
+    local token_env = require("claudecode.hooks_settings").TOKEN_ENV
     terminal.set_launch_extras(function()
-      local args = {}
-      if M.state.hooks_settings_path then
-        args[#args + 1] = "--settings '" .. M.state.hooks_settings_path .. "'"
-      end
-      local extra = M._extra_launch_args and M._extra_launch_args() or nil
-      if extra and extra ~= "" then
-        args[#args + 1] = extra
-      end
-      return table.concat(args, " "), { [hooks_settings.TOKEN_ENV] = M.state.auth_token }
+      return M._launch_args(), { [token_env] = M.state.auth_token }
     end)
   end
 end
@@ -654,6 +686,10 @@ function M._stop_hooks_bridge()
     pcall(os.remove, M.state.hooks_settings_path)
     M.state.hooks_settings_path = nil
   end
+  if M.state.mcp_config_path then
+    pcall(os.remove, M.state.mcp_config_path)
+    M.state.mcp_config_path = nil
+  end
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if terminal_ok and terminal.set_launch_extras then
     terminal.set_launch_extras(nil)
@@ -661,6 +697,69 @@ function M._stop_hooks_bridge()
   local status = package.loaded["claudecode.status"]
   if status then
     status.reset()
+  end
+end
+
+---Register a tool Claude can call (served by the `nvim` MCP server; Claude
+---sees it as `mcp__nvim__<name>`).
+---
+---```lua
+---require("claudecode").register_tool({
+---  name = "runTests",
+---  description = "Run the project's test suite and return the summary",
+---  inputSchema = { type = "object", properties = { file = { type = "string" } } },
+---  handler = function(input) return "all green" end, -- string or table result
+---})
+---```
+---`handler(input)` may return a string, a table (JSON-encoded), or a full MCP
+---`{ content = {...} }` result, or raise `error({ code, message })`. With
+---`async = true` the handler runs in a coroutine and may call
+---`require("claudecode.tools.init").await(function(done) ... end)`.
+---Takes effect for Claude sessions started after the first registration;
+---already-connected sessions are told the tool list changed.
+---@param spec {name: string, description: string, inputSchema: table|nil, handler: function, async: boolean|nil}
+function M.register_tool(spec)
+  assert(type(spec) == "table", "register_tool: spec must be a table")
+  assert(type(spec.name) == "string" and spec.name:match("^[%w_%-]+$"), "register_tool: name must match [A-Za-z0-9_-]+")
+  assert(type(spec.description) == "string" and spec.description ~= "", "register_tool: description is required")
+  assert(type(spec.handler) == "function", "register_tool: handler must be a function")
+
+  local function empty_object()
+    return vim.empty_dict and vim.empty_dict() or {}
+  end
+  local user_handler = spec.handler
+  local function wrapped(input, client)
+    local ret = user_handler(input or {}, client)
+    if type(ret) == "table" and ret.content then
+      return ret
+    end
+    local text = type(ret) == "string" and ret or vim.json.encode(ret == nil and empty_object() or ret)
+    return { content = { { type = "text", text = text } } }
+  end
+
+  local tools = require("claudecode.tools.init")
+  tools.register({
+    name = spec.name,
+    scope = "public",
+    requires_coroutine = spec.async == true,
+    schema = {
+      description = spec.description,
+      inputSchema = spec.inputSchema or { type = "object", properties = empty_object() },
+    },
+    handler = wrapped,
+  })
+  M._custom_tools = M._custom_tools or {}
+  M._custom_tools[spec.name] = true
+
+  if M.state.server then
+    if not M.state.mcp_config_path then
+      pcall(M._start_tools_server)
+      M._install_launch_extras()
+    end
+    local server = package.loaded["claudecode.server.init"]
+    if server and server.notify_kind then
+      server.notify_kind("tools", "notifications/tools/list_changed", empty_object())
+    end
   end
 end
 
@@ -676,12 +775,9 @@ function M.launch_command()
     "CLAUDE_CODE_SSE_PORT=" .. M.state.port,
   }
   local cmd = "claude"
-  if M.state.hooks_settings_path then
+  local extra = M._launch_args()
+  if extra ~= "" then
     parts[#parts + 1] = require("claudecode.hooks_settings").TOKEN_ENV .. "=" .. M.state.auth_token
-    cmd = cmd .. " --settings '" .. M.state.hooks_settings_path .. "'"
-  end
-  local extra = M._extra_launch_args and M._extra_launch_args() or nil
-  if extra and extra ~= "" then
     cmd = cmd .. " " .. extra
   end
   parts[#parts + 1] = cmd
