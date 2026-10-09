@@ -4,6 +4,9 @@
 ![Neovim version](https://img.shields.io/badge/Neovim-0.8%2B-green)
 ![Status](https://img.shields.io/badge/Status-beta-blue)
 
+> [!NOTE]
+> **This is a fork of [coder/claudecode.nvim](https://github.com/coder/claudecode.nvim)** that closes most of the feature gap with the official VS Code extension. It tracks upstream and stays protocol compatible; see [What this fork adds](#what-this-fork-adds) and install it from `anubhab7111/claudecode.nvim` (branch `lightweight-parity`).
+
 **The first Neovim IDE integration for Claude Code** — bringing Anthropic's AI coding assistant to your favorite editor with a pure Lua implementation.
 
 > 🎯 **TL;DR:** When Anthropic released Claude Code with VS Code and JetBrains support, I reverse-engineered their extension and built this Neovim plugin. This plugin implements the same WebSocket-based MCP protocol, giving Neovim users the same AI-powered coding experience.
@@ -20,11 +23,30 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
 - ⚡ **First to Market** — Beat Anthropic to releasing Neovim support
 - 🛠️ **Built with AI** — Used Claude to reverse-engineer Claude's own protocol
 
+## What this fork adds
+
+Everything below is opt-out (or opt-in where noted) and costs nothing until it is used: no polling, and work happens only when Claude sends an event.
+
+- **Per-change diff review** — accept or reject single hunks with Vim's own diff verbs (`]c`, `do`, `dp`, `:w`). [Details](#reviewing-one-change-at-a-time)
+- **Hooks bridge** — Claude's lifecycle events reach Neovim over HTTP hooks, powering:
+  - a **statusline** component (`require("claudecode").statusline()`): working / needs input / done, permission mode, subagents, todo progress
+  - **alerts** when Claude needs you while its terminal is hidden
+  - **autosave** before Claude reads or edits a modified buffer
+  - **live reload** of buffers Claude changes on disk (Edit/Write, Bash, formatters). [Details](#hooks-bridge-statusline-alerts-autosave-live-reload)
+- **Plan review in a buffer** — edit Claude's plan as Markdown and `:w` to send it back, `ga` to approve. [Details](#plan-review-in-a-buffer)
+- **Whole-turn review** — quickfix list, diff and per-hunk revert of everything Claude changed in its last turn, even with auto-accept. [Details](#reviewing-a-whole-turn)
+- **One Claude per tab** (opt-in `multi_session = true`) with selections, mentions and diffs routed to the right session. [Details](#multiple-claude-sessions-one-per-tab)
+- **`nvim` MCP server** — Claude gets LSP tools (definition, references, hover, symbols) backed by your running language servers, plus `register_tool()` for your own. [Details](#neovim-tools-for-claude-lsp-and-your-own)
+- **Privacy controls** — secret files (`.env`, keys) never send selected text; open-file context can be turned off. [Details](#privacy-what-claude-sees-from-your-editor)
+- **Context commands** — `:ClaudeCodeInsertRef`, `:ClaudeCodeEdit`, `:ClaudeCodeSendTerm`, `:ClaudeCodeCycleMode`. [Details](#key-commands)
+- **Terminal fixes** — `Ctrl-Z` no longer suspends Claude inside Neovim, and a stopped Claude is resumed.
+
 ## Installation
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "anubhab7111/claudecode.nvim",
+  branch = "lightweight-parity",
   dependencies = { "folke/snacks.nvim" },
   config = true,
   -- `cmd` lets lazy.nvim create command stubs that load the plugin on first use,
@@ -46,6 +68,18 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
     "ClaudeCodeDiffAccept",
     "ClaudeCodeDiffDeny",
     "ClaudeCodeCloseAllDiffs",
+    "ClaudeCodeInsertRef",
+    "ClaudeCodeEdit",
+    "ClaudeCodeSendTerm",
+    "ClaudeCodeSendText",
+    "ClaudeCodeCycleMode",
+    "ClaudeCodeReview",
+    "ClaudeCodeReviewDiff",
+    "ClaudeCodeReviewRevert",
+    "ClaudeCodePlanApprove",
+    "ClaudeCodeSessions",
+    "ClaudeCodeResume",
+    "ClaudeCodeLaunchCmd",
   },
   keys = {
     { "<leader>a", nil, desc = "AI/Claude Code" },
