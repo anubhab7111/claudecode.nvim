@@ -144,6 +144,10 @@ function M.guard_claude_terminal(buf)
   if vim.keymap and vim.keymap.set then
     pcall(vim.keymap.set, "t", "<C-z>", "<Nop>", { buffer = buf, desc = "Claude: ignore suspend" })
   end
+  -- Let Claude's own shortcuts through and add the chat scroll keys.
+  pcall(function()
+    require("claudecode.terminal_keys").attach(buf)
+  end)
   if not (vim.api and vim.api.nvim_create_autocmd) then
     return
   end

@@ -40,6 +40,7 @@ Everything below is opt-out (or opt-in where noted) and costs nothing until it i
 - **Privacy controls** — secret files (`.env`, keys) never send selected text; open-file context can be turned off. [Details](#privacy-what-claude-sees-from-your-editor)
 - **Context commands** — `:ClaudeCodeInsertRef`, `:ClaudeCodeEdit`, `:ClaudeCodeSendTerm`, `:ClaudeCodeCycleMode`. [Details](#key-commands)
 - **Terminal fixes** — `Ctrl-Z` no longer suspends Claude inside Neovim, and a stopped Claude is resumed.
+- **Claude's keys win in its terminal** — double `Esc` (rewind), `Ctrl-_` (undo), `Ctrl-R` and the rest reach Claude even if a global or plugin terminal mapping uses them (including Snacks' double-`Esc`). `Ctrl-U` / `PageUp` scroll the chat. [Details](#keys-inside-the-claude-terminal)
 
 ## Installation
 
@@ -397,6 +398,28 @@ require("claudecode").register_tool({
 
 Set `async = true` and call `require("claudecode.tools.init").await(function(done) ... end)` inside the handler for work that completes in a callback (jobs, LSP requests) without blocking Neovim.
 
+## Keys inside the Claude terminal
+
+Claude Code is a full TUI with its own shortcuts. Inside the Claude terminal buffer the plugin makes sure they reach Claude, and adds keys to scroll the chat.
+
+- **Claude's keys win.** Each of Claude's shortcuts is mapped buffer-locally to itself, which overrides global and plugin terminal-mode mappings on the same key: `Esc` (so double `Esc` rewinds instead of triggering Snacks' "double escape to normal mode"), `Shift-Tab`, `Ctrl-_` / `Ctrl-/` (undo), `Ctrl-A B C D E F G J K L N O P R S T V W Y` and `Alt-B D F M O P T V Y`. Your mappings elsewhere are untouched.
+- **Not claimed:** `Ctrl-X` (commonly "leave terminal mode"; add `"<C-x>"` to `passthrough` to give Claude its `Ctrl-X` chords), `Ctrl-\` (Neovim's `Ctrl-\ Ctrl-N`), and `Ctrl-Z` (ignored).
+- **Scrolling the chat.** `Ctrl-U` or `PageUp` scrolls up half a page.
+  - When Claude runs fullscreen (it owns the transcript), you stay in terminal mode and enter a scroll mode: `Ctrl-D` / `Ctrl-F` / `PageDown` page down, `Ctrl-B` pages up, `Ctrl-Y` / `Ctrl-E` move one line. `Ctrl-Home` / `Ctrl-End` jump to the top / bottom. Any other key ends scroll mode and goes to Claude, so `Ctrl-D`, `Ctrl-B`, `Ctrl-E` and `Ctrl-Y` keep their Claude meaning while you type.
+  - When Claude runs inline (the transcript is in Neovim's scrollback), the key leaves terminal mode and runs your normal-mode `Ctrl-U`, so every motion, search and smooth-scroll plugin works. Scrolling back to the bottom returns to typing (`resume_at_bottom`).
+- The only Claude shortcut given up is `Ctrl-U` (delete to start of line).
+
+```lua
+terminal = {
+  keys = {
+    passthrough = true, -- true = the list above | false | your own list of keys
+    scroll_up = { "<C-u>", "<PageUp>" }, -- false = no scroll keys
+    resume_at_bottom = true,
+  },
+  -- keys = false, -- turn all of this off
+}
+```
+
 ## Sending text to the Claude terminal
 
 `:ClaudeCodeSendText {text}` types `{text}` into the open Claude terminal and submits it — useful for scripting and keymaps. Use `:ClaudeCodeSendText!` to insert the text without submitting. The same is available programmatically:
@@ -547,6 +570,13 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
       auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
+      -- Keys inside the Claude terminal; `false` disables all of it. See
+      -- "Keys inside the Claude terminal" below.
+      keys = {
+        passthrough = true, -- true = Claude's own keys | false | list of keys
+        scroll_up = { "<C-u>", "<PageUp>" }, -- false = no scroll keys
+        resume_at_bottom = true, -- inline Claude: back to typing at the bottom
+      },
       -- Work around a Neovim core bug (< 0.12.2) that fragments large pastes into
       -- the terminal, making Cmd+V appear to truncate ([#161]). true | false | "auto"
       -- ("auto", the default, enables it only on affected Neovim versions).

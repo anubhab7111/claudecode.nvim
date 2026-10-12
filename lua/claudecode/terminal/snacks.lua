@@ -49,6 +49,12 @@ end
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   local should_insert = focus and config.auto_insert ~= false
+  -- Snacks turns a double <Esc> into "leave terminal mode", which swallows
+  -- Claude's own double-Escape (rewind). Hand both Escapes to Claude.
+  local term_normal = nil
+  if require("claudecode.terminal_keys").claims_escape() then
+    term_normal = false
+  end
   return {
     env = env_table,
     cwd = config.cwd,
@@ -61,6 +67,7 @@ local function build_opts(config, env_table, focus)
       height = 0,
       relative = "editor",
       keys = {
+        term_normal = term_normal,
         claude_new_line = {
           "<S-CR>",
           function()

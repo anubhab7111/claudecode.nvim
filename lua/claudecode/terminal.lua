@@ -25,6 +25,9 @@ local defaults = {
   auto_insert = true,
   env = {},
   snacks_win_opts = {},
+  -- Keys inside the Claude terminal (see terminal_keys.lua): false disables, or
+  -- { passthrough = true|false|string[], scroll_up = string[]|false, resume_at_bottom = boolean }
+  keys = nil,
   fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
   -- Working directory control
   cwd = nil, -- static cwd override
@@ -579,6 +582,12 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         defaults.snacks_win_opts = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for snacks_win_opts", vim.log.levels.WARN)
+      end
+    elseif k == "keys" then
+      if type(v) == "table" or type(v) == "boolean" then
+        defaults.keys = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for keys: " .. tostring(v), vim.log.levels.WARN)
       end
     elseif k == "fix_streamed_paste" then
       if type(v) == "boolean" or v == "auto" then
